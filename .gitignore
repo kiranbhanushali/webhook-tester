@@ -1,0 +1,19 @@
+## IDEs
+/nbproject
+/.idea
+
+## Binaries
+/app
+/webhook-tester
+
+## Generated code
+*.gen.go
+*_enum.go
+*.pb.go
+
+## Temp dirs & trash
+*.env
+/__old__
+/temp
+/tmp
+.DS_Store

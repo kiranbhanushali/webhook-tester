@@ -1,0 +1,9 @@
+## Vendor
+/node_modules
+
+## Distributive
+/dist
+
+## etc
+*.log
+/src/*-old

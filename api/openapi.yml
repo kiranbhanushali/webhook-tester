@@ -1,0 +1,467 @@
+openapi: 3.0.3
+info:
+  title: WebHook Tester
+  description: The powerful tool to test webhooks and not only
+  version: 0.3.0
+  contact: {name: tarampampam, url: 'https://github.com/tarampampam'}
+
+servers:
+  - {url: '/', description: Current server}
+
+tags:
+  - name: api
+  - name: service
+
+paths:
+  /api/settings:
+    get:
+      summary: Get app settings
+      tags: [api]
+      operationId: apiSettings
+      responses:
+        '200': {$ref: '#/components/responses/SettingsResponse'}
+
+  /api/session:
+    post:
+      summary: Create a new session
+      tags: [api]
+      operationId: apiSessionCreate
+      requestBody: {$ref: '#/components/requestBodies/CreateSessionRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/SessionOptionsResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/session/check/exists:
+    post:
+      summary: Batch check if sessions exist by UUID
+      tags: [api]
+      operationId: apiSessionCheckExists
+      requestBody: {$ref: '#/components/requestBodies/CheckSessionExistsRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/CheckSessionExistsResponse'}
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/session/{session_uuid}:
+    get:
+      summary: Get session options by UUID
+      tags: [api]
+      operationId: apiSessionGet
+      parameters: [{$ref: '#/components/parameters/SessionUUIDInPath'}]
+      responses:
+        '200': {$ref: '#/components/responses/SessionOptionsResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+    delete:
+      summary: Delete a session by UUID
+      tags: [api]
+      operationId: apiSessionDelete
+      parameters: [{$ref: '#/components/parameters/SessionUUIDInPath'}]
+      responses:
+        '200': {$ref: '#/components/responses/SuccessfulOperationResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/session/{session_uuid}/requests:
+    get: # TODO: add possibility to omit the request body
+      summary: Get the list of requests for a session by UUID
+      tags: [api]
+      operationId: apiSessionListRequests
+      parameters: [{$ref: '#/components/parameters/SessionUUIDInPath'}]
+      responses:
+        '200': {$ref: '#/components/responses/CapturedRequestsListResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+    delete:
+      summary: Delete all requests for a session by UUID
+      tags: [api]
+      operationId: apiSessionDeleteAllRequests
+      parameters: [{$ref: '#/components/parameters/SessionUUIDInPath'}]
+      responses:
+        '200': {$ref: '#/components/responses/SuccessfulOperationResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/session/{session_uuid}/requests/subscribe:
+    get:
+      summary: Subscribe to new requests for a session by UUID using WebSocket
+      tags: [api]
+      operationId: apiSessionRequestsSubscribe
+      parameters:
+        - {$ref: '#/components/parameters/SessionUUIDInPath'}
+        - {$ref: '#/components/parameters/WebSocketRequestConnectionInHeader'}
+        - {$ref: '#/components/parameters/WebSocketRequestUpgradeInHeader'}
+        - {$ref: '#/components/parameters/WebSocketRequestSecKeyInHeader'}
+        - {$ref: '#/components/parameters/WebSocketRequestSecVersionInHeader'}
+      responses:
+        '101':
+          description: Switching Protocols
+          headers:
+            Connection: {$ref: '#/components/headers/WebSocketResponseConnection'}
+            Upgrade: {$ref: '#/components/headers/WebSocketResponseUpgrade'}
+            Sec-Websocket-Accept: {$ref: '#/components/headers/WebSocketResponseSecWebsocketAccept'}
+        '200':
+          description: WebSocket connection established
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RequestEvent'}
+        '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/session/{session_uuid}/requests/{request_uuid}:
+    get:
+      summary: Get captured request details by UUID for a session by UUID
+      tags: [api]
+      operationId: apiSessionGetRequest
+      parameters:
+        - {$ref: '#/components/parameters/SessionUUIDInPath'}
+        - {$ref: '#/components/parameters/RequestUUIDInPath'}
+      responses:
+        '200': {$ref: '#/components/responses/CapturedRequestsResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+    delete:
+      summary: Delete a request by UUID for a session by UUID
+      tags: [api]
+      operationId: apiSessionDeleteRequest
+      parameters:
+        - {$ref: '#/components/parameters/SessionUUIDInPath'}
+        - {$ref: '#/components/parameters/RequestUUIDInPath'}
+      responses:
+        '200': {$ref: '#/components/responses/SuccessfulOperationResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/version:
+    get:
+      summary: Get app version
+      tags: [api]
+      operationId: apiAppVersion
+      responses:
+        '200': {$ref: '#/components/responses/VersionResponse'}
+
+  /api/version/latest:
+    get:
+      summary: Get the latest app version
+      tags: [api]
+      operationId: apiAppVersionLatest
+      responses:
+        '200': {$ref: '#/components/responses/VersionResponse'}
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /ready:
+    get:
+      summary: Readiness probe (checks if the app is ready to serve traffic)
+      tags: [service]
+      operationId: readinessProbe
+      responses:
+        '200': {$ref: '#/components/responses/ServiceHealthy'}
+        '503': {$ref: '#/components/responses/ServiceUnhealthy'}
+
+    head:
+      summary: Readiness probe (HEAD)
+      description: Alias for the GET method, but without response body content
+      tags: [service]
+      operationId: readinessProbeHead
+      responses:
+        '200': {$ref: '#/components/responses/ServiceHealthy'}
+        '503': {$ref: '#/components/responses/ServiceUnhealthy'}
+
+  /healthz:
+    get:
+      summary: Liveness probe (checks if the app is running or down)
+      tags: [service]
+      operationId: livenessProbe
+      responses:
+        '200': {$ref: '#/components/responses/ServiceHealthy'}
+        '503': {$ref: '#/components/responses/ServiceUnhealthy'}
+
+    head:
+      summary: Liveness probe (HEAD)
+      description: Alias for the GET method, but without response body content
+      tags: [service]
+      operationId: livenessProbeHead
+      responses:
+        '200': {$ref: '#/components/responses/ServiceHealthy'}
+        '503': {$ref: '#/components/responses/ServiceUnhealthy'}
+
+components:
+  schemas: # ------------------------------------------------ SCHEMAS -------------------------------------------------
+    StatusCode:
+      description: HTTP status code
+      type: integer
+      example: 301
+      minimum: 200
+      maximum: 530
+
+    Base64Encoded:
+      description: Base64-encoded content
+      type: string
+      maxLength: 10240
+      example: aGVsbG8gd29ybGQ=
+
+    UnixMilliTime:
+      description: Unix timestamp in milliseconds (the number of milliseconds elapsed since January 1, 1970 UTC)
+      type: integer
+      example: 1667845578
+      minimum: 1600000000
+      x-go-type: int64
+
+    UUID:
+      type: string
+      format: uuid
+      pattern: '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+      example: 9b6bbab9-c197-4dd3-bc3f-3cb6253820c7
+
+    HttpMethod:
+      description: HTTP method (GET, POST, PUT, DELETE, etc.)
+      type: string
+      minLength: 1
+      example: GET
+
+    HttpHeader:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 40, example: User-Agent}
+        value: {type: string, minLength: 0, maxLength: 2048, example: curl/7.68.0}
+      required: [name, value]
+      additionalProperties: false
+
+    SessionResponseOptions:
+      description: Session response options
+      type: object
+      properties:
+        status_code: {$ref: '#/components/schemas/StatusCode'}
+        headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        delay: {type: integer, description: Delay in seconds, maximum: 30, example: 5, x-go-type: uint16}
+        response_body_base64: {$ref: '#/components/schemas/Base64Encoded'}
+      required: [status_code, headers, delay, response_body_base64]
+      additionalProperties: false
+
+    AppSettings:
+      description: Configuration settings of the app
+      type: object
+      properties:
+        limits:
+          type: object
+          description: App limit settings
+          properties:
+            max_requests: {type: integer, x-go-type: uint16, example: 128}
+            max_request_body_size: {type: integer, x-go-type: uint32, example: 1024, description: In bytes}
+            session_ttl: {type: integer, x-go-type: uint32, example: 5, description: In seconds}
+          required: [max_requests, max_request_body_size, session_ttl]
+          additionalProperties: false
+        tunnel:
+          type: object
+          description: Tunnel settings
+          properties:
+            enabled: {type: boolean, example: true}
+            url: {type: string, example: 'https://tunnel.example.com/'} # optional
+          required: [enabled]
+          additionalProperties: false
+        public_url_root: {type: string, example: 'https://example.com', description: 'Public URL root override for webhook URLs'} # optional
+      required: [limits, tunnel]
+      additionalProperties: false
+
+    CapturedRequest:
+      type: object
+      description: Recorded request
+      properties:
+        uuid: {$ref: '#/components/schemas/UUID'}
+        client_address: {type: string, format: IPv4, example: '214.184.32.7'}
+        method: {$ref: '#/components/schemas/HttpMethod'}
+        request_payload_base64: {$ref: '#/components/schemas/Base64Encoded'}
+        headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        url:
+          description: The URL's hostname, schema, and port may differ from those on the frontend due to proxying
+          type: string
+          example: 'https://example.com/path?query=string'
+        captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+      required: [uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli]
+      additionalProperties: false
+
+    RequestEvent:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [create, delete, clear]
+          example: create
+        request: {$ref: '#/components/schemas/RequestEventRequest'}
+      required: [action]
+      additionalProperties: false
+
+    RequestEventRequest:
+      type: object
+      properties:
+        uuid: {$ref: '#/components/schemas/UUID'}
+        client_address: {type: string, example: '214.184.32.7', description: 'May be IPv6 like 2a0e:4005:1002:ffff:185:40:4:132'}
+        method: {$ref: '#/components/schemas/HttpMethod'}
+        headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        url: {type: string, example: 'https://example.com/path?query=string'}
+        captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+      required: [uuid, client_address, method, headers, url, captured_at_unix_milli]
+      additionalProperties: false
+
+  headers: # ------------------------------------------------ HEADERS -------------------------------------------------
+    WebSocketResponseConnection:
+      description: WebSocket connection header
+      schema: {type: string, example: Upgrade, externalDocs: {url: 'https://mzl.la/3WWJi8w'}}
+
+    WebSocketResponseUpgrade:
+      description: WebSocket upgrade header
+      schema: {type: string, example: websocket, externalDocs: {url: 'https://mzl.la/46XxkyZ'}}
+
+    WebSocketResponseSecWebsocketAccept:
+      description: WebSocket Sec-WebSocket-Accept header
+      schema: {type: string, example: 'nESCeAuSsDkp9fVKF/BQ9Nfev+U=', externalDocs: {url: 'https://mzl.la/4duaxwC'}}
+
+  parameters: # --------------------------------------------- PARAMETERS ----------------------------------------------
+    SessionUUIDInPath:
+      description: Session UUID (version 4)
+      name: session_uuid
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        pattern: '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+        example: 9b6bbab9-c197-4dd3-bc3f-3cb6253820c7
+
+    RequestUUIDInPath:
+      description: Request UUID (version 4)
+      name: request_uuid
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+        pattern: '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+        example: d74a7998-dcbc-4d77-82ba-27945e56a25d
+
+    WebSocketRequestConnectionInHeader:
+      name: Connection
+      in: header
+      required: true
+      schema: {type: string, example: Upgrade, externalDocs: {url: 'https://mzl.la/3WWJi8w'}}
+
+    WebSocketRequestUpgradeInHeader:
+      name: Upgrade
+      in: header
+      required: true
+      schema: {type: string, example: websocket, externalDocs: {url: 'https://mzl.la/46XxkyZ'}}
+
+    WebSocketRequestSecKeyInHeader:
+      name: Sec-WebSocket-Key
+      in: header
+      required: true
+      schema: {type: string, example: 'K/TxmSsnVc71pFVjGIYy3w=='}
+
+    WebSocketRequestSecVersionInHeader:
+      name: Sec-WebSocket-Version
+      in: header
+      required: true
+      schema: {type: string, example: '13'}
+
+  requestBodies: # --------------------------------------------- REQUESTS ---------------------------------------------
+    CreateSessionRequest:
+      description: Options for creating a new session
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/SessionResponseOptions'}
+
+    CheckSessionExistsRequest:
+      description: Check if a session exists by UUID
+      content:
+        application/json:
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/UUID'}
+            minItems: 1
+            maxItems: 100
+
+  responses: # ---------------------------------------------- RESPONSES -----------------------------------------------
+    VersionResponse:
+      description: Information about the version
+      content:
+        application/json:
+          schema:
+            type: object
+            properties: {version: {type: string, example: '0.0.1'}}
+            required: [version]
+            additionalProperties: false
+
+    SettingsResponse:
+      description: Configuration settings of the app
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AppSettings'}
+
+    SessionOptionsResponse:
+      description: Options of the session
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              uuid: {$ref: '#/components/schemas/UUID'}
+              response: {$ref: '#/components/schemas/SessionResponseOptions'}
+              created_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+            required: [uuid, response, created_at_unix_milli]
+            additionalProperties: false
+
+    CheckSessionExistsResponse:
+      description: A hashmap of session UUIDs and their existence
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties:
+              type: boolean
+              example: true
+            example:
+              9b6bbab9-c197-4dd3-bc3f-3cb6253820c7: true
+              9b6bbab9-c197-4dd3-bc3f-3cb6253820c8: false
+
+    CapturedRequestsListResponse:
+      description: List of captured requests, sorted from newest to oldest
+      content:
+        application/json:
+          schema: {type: array, items: {$ref: '#/components/schemas/CapturedRequest'}}
+
+    CapturedRequestsResponse:
+      description: Captured request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/CapturedRequest'}
+
+    SuccessfulOperationResponse:
+      description: Operation completed successfully
+      content:
+        application/json:
+          schema:
+            type: object
+            properties: {success: {type: boolean, example: true}}
+            required: [success]
+            additionalProperties: false
+
+    ServiceHealthy:
+      description: Service is operational
+      content: {text/plain: {example: OK}}
+
+    ServiceUnhealthy:
+      description: Service unavailable
+      content: {text/plain: {example: 'application error: some service is unavailable: host "10.0.0.10" unreachable'}}
+
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            type: object
+            properties: {error: {type: string, example: 'Internal server error'}}
+            required: [error]
+            additionalProperties: false
