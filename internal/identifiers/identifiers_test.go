@@ -1,6 +1,8 @@
 package identifiers_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"gh.tarampamp.am/webhook-tester/v2/internal/identifiers"
@@ -223,6 +225,96 @@ func TestExtract_MethodValueAssignable(t *testing.T) {
 	e := identifiers.NewExtractor([]string{"trackingId"}, nil, false)
 
 	var _ storage.IdentifierExtractor = e.Extract
+}
+
+func TestExtract_MaxNodesCutoff(t *testing.T) {
+	t.Parallel()
+
+	e := identifiers.NewExtractor([]string{"trackingId"}, nil, false)
+	// Force an aggressively small node budget so traversal stops early.
+	e.MaxNodes = 3
+
+	// A long array of matched-key objects. The walker visits: the array node, then
+	// the first object + its scalar value (exhausting the 3-node budget) before any
+	// later element is reached. So "early" is recorded but "late" is not.
+	var sb strings.Builder
+
+	sb.WriteString(`[`)
+
+	const n = 100
+
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(`,`)
+		}
+
+		switch i {
+		case 0:
+			sb.WriteString(`{"trackingId":"early"}`)
+		case n - 1:
+			sb.WriteString(`{"trackingId":"late"}`)
+		default:
+			fmt.Fprintf(&sb, `{"trackingId":"v%d"}`, i)
+		}
+	}
+
+	sb.WriteString(`]`)
+
+	got := e.Extract([]byte(sb.String()), nil, "")
+
+	if !containsIdentifier(got, storage.Identifier{Key: "trackingid", Value: "early"}) {
+		t.Errorf("MaxNodes cutoff: expected early identifier to be present, got %v", got)
+	}
+
+	if containsIdentifier(got, storage.Identifier{Key: "trackingid", Value: "late"}) {
+		t.Errorf("MaxNodes cutoff: late identifier (beyond node budget) should NOT be present, got %v", got)
+	}
+
+	if len(got) >= n {
+		t.Errorf("MaxNodes cutoff: expected traversal to stop early, got %d identifiers", len(got))
+	}
+}
+
+func TestExtract_DepthCap(t *testing.T) {
+	t.Parallel()
+
+	// The implementation caps recursion depth at 64. A matched key nested within the
+	// cap is recorded; the same key nested beyond the cap is not.
+	e := identifiers.NewExtractor([]string{"trackingId"}, nil, false)
+
+	// Shallow: the matched-key object sits at nesting depth 10 (well within the cap).
+	shallow := e.Extract(nestedJSON(10, "trackingId", "SHALLOW"), nil, "")
+	if !containsIdentifier(shallow, storage.Identifier{Key: "trackingid", Value: "SHALLOW"}) {
+		t.Errorf("depth cap: identifier within cap should be present, got %v", shallow)
+	}
+
+	// Deep: the matched-key object sits at nesting depth 70 (beyond the 64 cap).
+	deep := e.Extract(nestedJSON(70, "trackingId", "DEEP"), nil, "")
+	if containsIdentifier(deep, storage.Identifier{Key: "trackingid", Value: "DEEP"}) {
+		t.Errorf("depth cap: identifier beyond cap should NOT be present, got %v", deep)
+	}
+}
+
+// nestedJSON builds an object containing {key: value} wrapped in `depth` levels of
+// {"wrap": ...}, so the matched-key object sits at JSON nesting depth `depth`.
+func nestedJSON(depth int, key, value string) []byte {
+	inner := fmt.Sprintf(`{%q:%q}`, key, value)
+	for i := 0; i < depth; i++ {
+		inner = fmt.Sprintf(`{"wrap":%s}`, inner)
+	}
+
+	return []byte(inner)
+}
+
+// containsIdentifier reports whether want appears in got.
+func containsIdentifier(got []storage.Identifier, want storage.Identifier) bool {
+	for _, id := range got {
+		if id == want {
+			return true
+		}
+	}
+
+	return false
 }
 
 // identifiersEqual checks that got and want contain the same elements (order-independent).

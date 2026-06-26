@@ -36,6 +36,11 @@ type Extractor struct {
 	MaxNodes int
 }
 
+// Compile-time guarantee that Extract satisfies the storage extractor seam, so a
+// signature drift is caught by `go build` (not only by the test-side check). Task 10
+// wires this via storage.WithSQLiteExtractor(extractor.Extract).
+var _ storage.IdentifierExtractor = (&Extractor{}).Extract
+
 // NewExtractor constructs an Extractor with the given allowlists.
 // All entries in keys and headers are lower-cased before being stored so that
 // comparison at extraction time is always case-insensitive.
