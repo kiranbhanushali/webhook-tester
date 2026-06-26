@@ -13,4 +13,5 @@ type AppSettings struct {
 	TunnelEnabled      bool          // feature: tunnel (public url to local server) enabled
 	TunnelURL          *url.URL      // tunnel public url
 	PublicURLRoot      *url.URL      // public URL root override for webhook URLs
+	AuthToken          string        // shared token for dashboard/API auth; empty = auth disabled
 }

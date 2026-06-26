@@ -12,6 +12,7 @@ import (
 
 	"gh.tarampamp.am/webhook-tester/v2/internal/config"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/frontend"
+	"gh.tarampamp.am/webhook-tester/v2/internal/http/middleware/auth"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/middleware/logreq"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/middleware/webhook"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/openapi"
@@ -94,8 +95,10 @@ func (s *Server) Register(
 		// issue: https://github.com/tarampampam/webhook-tester/issues/575
 		return r.URL.Path == openapi.RouteLivenessProbe || r.URL.Path == openapi.RouteReadinessProbe
 	})( // logger middleware
-		webhook.New(ctx, log.Named("webhook"), db, pubSub, cfg)( // webhook capture as a middleware
-			handler,
+		webhook.New(ctx, log.Named("webhook"), db, pubSub, cfg)( // webhook capture as a middleware (never gated)
+			auth.New(cfg.AuthToken, log.Named("auth"))( // auth gates /api/* only; SPA/health/webhooks pass through
+				handler,
+			),
 		),
 	)
 
