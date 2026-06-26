@@ -220,6 +220,22 @@ func TestLogin_EmptyBody_Returns401(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+func TestLogin_MalformedBody_Returns401NoPanic(t *testing.T) {
+	t.Parallel()
+
+	mw := middleware("secret123")
+	handler := mw(okHandler)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`notjson`))
+	r.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+
+	// Must not panic on malformed JSON.
+	assert.NotPanics(t, func() { handler.ServeHTTP(w, r) })
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
 // -----------------------------------------------------------------------
 // Logout endpoint
 // -----------------------------------------------------------------------
@@ -317,6 +333,49 @@ func TestBypass_SPAShellPassesThrough(t *testing.T) {
 	handler.ServeHTTP(w, r)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// -----------------------------------------------------------------------
+// Path normalization — the gate must not be bypassable via uncleaned paths.
+// Go's server does NOT clean r.URL.Path before the handler chain, so a request
+// to //api/sessions arrives with a raw path that does not literally start with
+// "/api/". The middleware must normalize before its prefix/exact checks.
+// -----------------------------------------------------------------------
+
+func TestNormalize_DoubleSlashAPI_IsGated(t *testing.T) {
+	t.Parallel()
+
+	mw := middleware("secret123")
+	handler := mw(okHandler)
+
+	// Raw, uncleaned path that would skip a naive HasPrefix("/api/") check.
+	r := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	r.URL.Path = "//api/sessions" // force the uncleaned path the net/http server would pass through
+	// No credentials
+
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "//api/sessions must be gated, not bypassed")
+}
+
+func TestNormalize_DoubleSlashLogin_Works(t *testing.T) {
+	t.Parallel()
+
+	mw := middleware("secret123")
+	handler := mw(okHandler)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"token":"secret123"}`))
+	r.URL.Path = "//api/auth/login" // uncleaned path
+	r.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code, "//api/auth/login must be recognized as the login endpoint")
+	assert.Contains(t, w.Body.String(), `"ok":true`)
 }
 
 // -----------------------------------------------------------------------

@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"path"
 	"strings"
 
 	"go.uber.org/zap"
@@ -29,24 +30,28 @@ const cookieName = "wh_token"
 func New(token string, log *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := r.URL.Path
+			// Normalize the path before any prefix/exact check. Go's HTTP server does NOT clean
+			// r.URL.Path before the handler chain, so a request to e.g. "//api/sessions" or
+			// "/api/../api/x" would otherwise skip the gate. The security property must not depend
+			// on the router. path.Clean("//api/sessions") -> "/api/sessions"; path.Clean("/") -> "/".
+			cleaned := path.Clean(r.URL.Path)
 
 			// Login: always handled here (even when auth disabled so we can return {"ok":true})
-			if path == "/api/auth/login" && r.Method == http.MethodPost {
+			if cleaned == "/api/auth/login" && r.Method == http.MethodPost {
 				handleLogin(w, r, token, log)
 
 				return
 			}
 
 			// Logout: always handled here; no auth required to log out
-			if path == "/api/auth/logout" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
+			if cleaned == "/api/auth/logout" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
 				handleLogout(w)
 
 				return
 			}
 
 			// Only gate /api/* paths — everything else (SPA, health, webhooks) passes through
-			if !strings.HasPrefix(path, "/api/") {
+			if !strings.HasPrefix(cleaned, "/api/") {
 				next.ServeHTTP(w, r)
 
 				return
