@@ -52,6 +52,9 @@ func TestServer_StartHTTP(t *testing.T) {
 		&config.AppSettings{},
 		db,
 		pubsub.NewInMemory[pubsub.RequestEvent](),
+		nil, // extractor (Task 10 wires a real one)
+		nil, // hot index (Task 10 wires a real one)
+		time.Second,
 		false,
 	)
 
@@ -123,7 +126,7 @@ func TestServer_StartHTTP(t *testing.T) {
 	t.Run("webhook capture", func(t *testing.T) {
 		t.Parallel()
 
-		var status, body, headers = sendRequest(t, "POST", baseUrl+"/"+sID)
+		var status, body, headers = sendRequest(t, "POST", baseUrl+"/w/"+sID)
 
 		require.Equal(t, http.StatusExpectationFailed, status)
 		require.Contains(t, string(body), webhookResponse)
@@ -184,6 +187,9 @@ func TestServer_PublicURLRoot(t *testing.T) {
 		&config.AppSettings{PublicURLRoot: publicURLRoot},
 		db,
 		pubsub.NewInMemory[pubsub.RequestEvent](),
+		nil, // extractor (Task 10 wires a real one)
+		nil, // hot index (Task 10 wires a real one)
+		time.Second,
 		false,
 	)
 

@@ -20,9 +20,11 @@ import (
 	"gh.tarampamp.am/webhook-tester/v2/internal/config"
 	"gh.tarampamp.am/webhook-tester/v2/internal/encoding"
 	appHttp "gh.tarampamp.am/webhook-tester/v2/internal/http"
+	"gh.tarampamp.am/webhook-tester/v2/internal/identifiers"
 	"gh.tarampamp.am/webhook-tester/v2/internal/logger"
 	"gh.tarampamp.am/webhook-tester/v2/internal/pubsub"
 	"gh.tarampamp.am/webhook-tester/v2/internal/storage"
+	"gh.tarampamp.am/webhook-tester/v2/internal/storage/hotindex"
 	"gh.tarampamp.am/webhook-tester/v2/internal/tunnel"
 	"gh.tarampamp.am/webhook-tester/v2/internal/version"
 )
@@ -489,6 +491,14 @@ func (cmd *command) Run(parentCtx context.Context, log *zap.Logger) error { //no
 		appSettings.PublicURLRoot = parsedURL
 	}
 
+	// webhook-capture dependencies. These are sensible defaults for now; Task 10 replaces
+	// them with config-driven values (identifier allowlists, hot-index window, script timeout).
+	var (
+		webhookExtractor             = identifiers.NewExtractor([]string{"trackingId", "referenceId"}, nil, true)
+		webhookHotIndex              = hotindex.New(168 * time.Hour) //nolint:mnd // 7 days
+		webhookResponseScriptTimeout = time.Second
+	)
+
 	// create HTTP server
 	var server = appHttp.NewServer(ctx, httpLog,
 		appHttp.WithReadTimeout(cmd.options.timeouts.httpRead),
@@ -502,6 +512,9 @@ func (cmd *command) Run(parentCtx context.Context, log *zap.Logger) error { //no
 		&appSettings,
 		db,
 		pubSub,
+		webhookExtractor,
+		webhookHotIndex,
+		webhookResponseScriptTimeout,
 		cmd.options.frontend.useLive,
 	)
 

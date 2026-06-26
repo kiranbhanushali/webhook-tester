@@ -16,8 +16,10 @@ import (
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/middleware/logreq"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/middleware/webhook"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/openapi"
+	"gh.tarampamp.am/webhook-tester/v2/internal/identifiers"
 	"gh.tarampamp.am/webhook-tester/v2/internal/pubsub"
 	"gh.tarampamp.am/webhook-tester/v2/internal/storage"
+	"gh.tarampamp.am/webhook-tester/v2/internal/storage/hotindex"
 	"gh.tarampamp.am/webhook-tester/v2/web"
 )
 
@@ -67,6 +69,9 @@ func (s *Server) Register(
 	cfg *config.AppSettings,
 	db storage.Storage,
 	pubSub pubsub.PubSub[pubsub.RequestEvent],
+	extractor *identifiers.Extractor,
+	hotIndex *hotindex.HotIndex,
+	responseScriptTimeout time.Duration,
 	useLiveFrontend bool,
 ) *Server {
 	var (
@@ -95,7 +100,8 @@ func (s *Server) Register(
 		// issue: https://github.com/tarampampam/webhook-tester/issues/575
 		return r.URL.Path == openapi.RouteLivenessProbe || r.URL.Path == openapi.RouteReadinessProbe
 	})( // logger middleware
-		webhook.New(ctx, log.Named("webhook"), db, pubSub, cfg)( // webhook capture as a middleware (never gated)
+		// webhook capture as a middleware (never gated)
+		webhook.New(ctx, log.Named("webhook"), db, pubSub, cfg, extractor, hotIndex, responseScriptTimeout)(
 			auth.New(cfg.AuthToken, log.Named("auth"))( // auth gates /api/* only; SPA/health/webhooks pass through
 				handler,
 			),

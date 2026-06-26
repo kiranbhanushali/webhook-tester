@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,9 +17,20 @@ import (
 
 	"gh.tarampamp.am/webhook-tester/v2/internal/config"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/openapi"
+	"gh.tarampamp.am/webhook-tester/v2/internal/identifiers"
 	"gh.tarampamp.am/webhook-tester/v2/internal/pubsub"
+	"gh.tarampamp.am/webhook-tester/v2/internal/response"
 	"gh.tarampamp.am/webhook-tester/v2/internal/storage"
+	"gh.tarampamp.am/webhook-tester/v2/internal/storage/hotindex"
 )
+
+// webhookPathPrefix is the reserved URL prefix for webhook capture. Only requests
+// whose path begins with this prefix are considered for capture; everything else
+// (SPA, /api/*, /healthz, /ready) is passed through untouched.
+const webhookPathPrefix = "/w/"
+
+// slugPattern validates a human-readable session slug (mirrors the storage/OpenAPI regex).
+var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,48}$`)
 
 func New( //nolint:funlen,gocognit,gocyclo
 	appCtx context.Context,
@@ -26,43 +38,53 @@ func New( //nolint:funlen,gocognit,gocyclo
 	db storage.Storage,
 	pub pubsub.Publisher[pubsub.RequestEvent],
 	cfg *config.AppSettings,
+	extractor *identifiers.Extractor,
+	hotIndex *hotindex.HotIndex,
+	responseScriptTimeout time.Duration,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var sID, doIt = shouldCaptureRequest(r)
+			var ref, doIt = shouldCaptureRequest(r)
 			if !doIt {
 				next.ServeHTTP(w, r)
 
 				return
 			}
 
-			var reqCtx = r.Context()
+			var (
+				reqCtx = r.Context()
+				isUUID = openapi.IsValidUUID(ref)
+			)
 
-			// get the session from the storage
-			sess, sErr := db.GetSession(reqCtx, sID) //nolint:contextcheck
-			if sErr != nil {                         //nolint:nestif
+			// resolve the session: by slug first, then by id (UUID back-compat)
+			sess, sErr := db.GetSessionBySlug(reqCtx, ref) //nolint:contextcheck
+			if sErr != nil {
+				sess, sErr = db.GetSession(reqCtx, ref) //nolint:contextcheck
+			}
+
+			if sErr != nil { //nolint:nestif
 				// if the session is not found
 				if errors.Is(sErr, storage.ErrNotFound) {
-					// but the auto-creation is enabled
-					if cfg.AutoCreateSessions {
+					// auto-creation is supported ONLY for valid UUIDs (never for arbitrary slugs)
+					if isUUID && cfg.AutoCreateSessions {
 						// create a new session with some default values
 						if _, err := db.NewSession(reqCtx, storage.Session{ //nolint:contextcheck
 							Code: http.StatusOK,
-						}, sID); err != nil {
+						}, ref); err != nil {
 							respondWithError(w, log, http.StatusInternalServerError, err.Error())
 
 							return
-						} else {
-							// and try to get it again
-							if sess, sErr = db.GetSession(reqCtx, sID); sErr != nil { //nolint:contextcheck
-								respondWithError(w, log, http.StatusInternalServerError, sErr.Error())
-
-								return
-							} else {
-								// add the header to indicate that the session has been created automatically
-								w.Header().Set("X-Wh-Created-Automatically", "1")
-							}
 						}
+
+						// and try to get it again
+						if sess, sErr = db.GetSession(reqCtx, ref); sErr != nil { //nolint:contextcheck
+							respondWithError(w, log, http.StatusInternalServerError, sErr.Error())
+
+							return
+						}
+
+						// add the header to indicate that the session has been created automatically
+						w.Header().Set("X-Wh-Created-Automatically", "1")
 					} else {
 						respondWithError(w, log, http.StatusNotFound, "The webhook has not been created yet or may have expired")
 
@@ -74,6 +96,9 @@ func New( //nolint:funlen,gocognit,gocyclo
 					return
 				}
 			}
+
+			// the resolved session always carries its real ID (UUID), populated by the storage driver
+			var sID = sess.ID
 
 			{ // increase the session lifetime
 				var delta = time.Now().Add(cfg.SessionTTL).Sub(time.Unix(0, sess.CreatedAtUnixMilli*int64(time.Millisecond)))
@@ -113,13 +138,15 @@ func New( //nolint:funlen,gocognit,gocyclo
 			// sort headers by name
 			slices.SortFunc(rHeaders, func(i, j storage.HttpHeader) int { return strings.Compare(i.Name, j.Name) })
 
+			var fullURL = extractFullUrl(r)
+
 			// and save the request to the storage
 			rID, rErr := db.NewRequest(reqCtx, sID, storage.Request{ //nolint:contextcheck
 				ClientAddr: extractRealIP(r),
 				Method:     r.Method,
 				Body:       body,
 				Headers:    rHeaders,
-				URL:        extractFullUrl(r),
+				URL:        fullURL,
 			})
 			if rErr != nil {
 				respondWithError(w, log, http.StatusInternalServerError, rErr.Error())
@@ -128,6 +155,22 @@ func New( //nolint:funlen,gocognit,gocyclo
 			}
 
 			w.Header().Set("X-Wh-Request-Id", rID)
+
+			var now = time.Now()
+
+			// feed captured identifiers into the in-memory hot index (best-effort). The durable
+			// index is written separately by the storage driver's own injected extractor (Task 10);
+			// this double extraction is intentional and keeps the two indexes consistent.
+			if extractor != nil && hotIndex != nil {
+				for _, id := range extractor.Extract(body, rHeaders, fullURL) {
+					hotIndex.Add(id.Key, id.Value, hotindex.Ref{
+						SessionID:           sID,
+						SessionSlug:         sess.Slug,
+						RequestID:           rID,
+						CapturedAtUnixMilli: now.UnixMilli(),
+					})
+				}
+			}
 
 			// publish the captured request to the pub/sub. important note - we should use the app ctx instead of the req ctx
 			// because the request context can be canceled before the goroutine finishes (and moreover - before the
@@ -171,23 +214,36 @@ func New( //nolint:funlen,gocognit,gocyclo
 			w.Header().Set("Access-Control-Allow-Methods", "*")
 			w.Header().Set("Access-Control-Allow-Headers", "*")
 
-			// set the session headers
+			// set the session (custom) headers
 			for _, h := range sess.Headers {
 				w.Header().Set(h.Name, h.Value)
 			}
 
-			// by default, use the status code from the session
-			var statusCode = int(sess.Code)
+			// security headers are applied on EVERY response path (script or static)
+			for _, h := range sess.SecurityHeaders {
+				w.Header().Set(h.Name, h.Value)
+			}
 
-			// extract requested status code from the request URL (it should be the last part)
-			if parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/"); len(parts) > 1 {
-				// loop over parts slice from the end to the beginning
-				for i := len(parts) - 1; i >= 0; i-- {
-					if code, err := strconv.Atoi(parts[i]); err == nil && code >= 100 && code <= 599 {
-						statusCode = code
+			// resolve the static response: the session default status code, optionally overridden by a
+			// numeric segment in the URL path AFTER /w/{ref}/...
+			var (
+				statusCode   = statusFromPath(r.URL.Path, int(sess.Code))
+				responseBody = sess.ResponseBody
+			)
 
-						break
+			// if a response script is configured, try to render it; on ANY error fall back to the static response
+			if sess.ResponseScript != "" {
+				res, err := response.Render( //nolint:contextcheck
+					reqCtx, sess.ResponseScript, buildScriptRequest(r, sess.Slug, body, now), responseScriptTimeout,
+				)
+				if err != nil {
+					log.Warn("response script failed; falling back to the static response", zap.Error(err))
+				} else {
+					if res.Status != 0 { // a non-zero @status directive takes precedence
+						statusCode = res.Status
 					}
+
+					responseBody = res.Body
 				}
 			}
 
@@ -195,26 +251,90 @@ func New( //nolint:funlen,gocognit,gocyclo
 			w.WriteHeader(statusCode)
 
 			// write the response body
-			if _, err := w.Write(sess.ResponseBody); err != nil { //nolint:gosec
+			if _, err := w.Write(responseBody); err != nil { //nolint:gosec
 				log.Error("failed to write the response body", zap.Error(err))
 			}
 		})
 	}
 }
 
-// shouldCaptureRequest checks if the request should be captured (the path starts with a valid UUID).
+// shouldCaptureRequest reports whether the request targets the webhook-capture prefix
+// (/w/) and, if so, returns the session reference (the first path segment after /w/).
+// The reference is accepted when it is a valid slug or a valid UUID.
 func shouldCaptureRequest(r *http.Request) (string, bool) {
 	if r.URL == nil {
 		return "", false
 	}
 
-	var clean = strings.TrimLeft(r.URL.Path, "/")
+	if !strings.HasPrefix(r.URL.Path, webhookPathPrefix) {
+		return "", false
+	}
 
-	if len(clean) >= openapi.UUIDLength && openapi.IsValidUUID(clean[:openapi.UUIDLength]) {
-		return clean[:openapi.UUIDLength], true
+	// the session reference is the segment between the /w/ prefix and the next slash
+	var ref = r.URL.Path[len(webhookPathPrefix):]
+	if i := strings.IndexByte(ref, '/'); i >= 0 {
+		ref = ref[:i]
+	}
+
+	if ref == "" {
+		return "", false
+	}
+
+	if openapi.IsValidUUID(ref) || slugPattern.MatchString(ref) {
+		return ref, true
 	}
 
 	return "", false
+}
+
+// statusFromPath returns the HTTP status code requested via the URL path. Only segments
+// AFTER /w/{ref}/ are scanned (so a numeric slug is never mistaken for a status code); the
+// last valid numeric segment (100–599) wins. When none is found, def is returned.
+func statusFromPath(path string, def int) int {
+	var rest = strings.TrimPrefix(path, webhookPathPrefix)
+
+	// drop the {ref} segment; only the tail after it may carry a status override
+	i := strings.IndexByte(rest, '/')
+	if i < 0 {
+		return def
+	}
+
+	var statusCode = def
+
+	for _, part := range strings.Split(strings.Trim(rest[i+1:], "/"), "/") {
+		if code, err := strconv.Atoi(part); err == nil && code >= 100 && code <= 599 {
+			statusCode = code // last numeric segment wins
+		}
+	}
+
+	return statusCode
+}
+
+// buildScriptRequest converts the incoming HTTP request into the response-engine input.
+func buildScriptRequest(r *http.Request, slug string, body []byte, now time.Time) response.Request {
+	var query = make(map[string]string, len(r.URL.Query()))
+	for k, v := range r.URL.Query() {
+		if len(v) > 0 {
+			query[k] = v[0]
+		}
+	}
+
+	var header = make(map[string]string, len(r.Header))
+	for k, v := range r.Header {
+		if len(v) > 0 {
+			header[http.CanonicalHeaderKey(k)] = v[0]
+		}
+	}
+
+	return response.Request{
+		Method: r.Method,
+		Path:   r.URL.Path,
+		Slug:   slug,
+		Body:   string(body),
+		Query:  query,
+		Header: header,
+		Now:    now,
+	}
 }
 
 // TODO: add supporting of format requested by the user (json, html, plain text, etc).
