@@ -78,3 +78,13 @@ func TestInMemory_RaceProvocation(t *testing.T) {
 		return storage.NewInMemory(sTTL, maxReq, storage.WithInMemoryCleanupInterval(10*time.Nanosecond))
 	})
 }
+
+func TestInMemory_ExtendedSessionOps(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testExtendedSessionOps(t, func(sTTL time.Duration, maxReq uint32) storage.Storage {
+		return storage.NewInMemory(sTTL, maxReq, storage.WithInMemoryTimeNow(ft.Get))
+	})
+}

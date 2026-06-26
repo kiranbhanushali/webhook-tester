@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -736,6 +737,355 @@ func (s *FS) DeleteAllRequests(ctx context.Context, sID string) error {
 	}
 
 	return nil
+}
+
+// GetSessionBySlug scans all session directories looking for a session whose Slug field matches.
+// This is a linear scan — acceptable for a testing tool but not intended for high-volume use.
+// Returns ErrNotFound when slug is empty or no session has that slug.
+func (s *FS) GetSessionBySlug(ctx context.Context, slug string) (*Session, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if slug == "" {
+		return nil, ErrNotFound
+	}
+
+	var dirs []os.DirEntry
+
+	if err := s.withLock(true, func() (err error) { dirs, err = os.ReadDir(s.root); return }); err != nil {
+		return nil, err
+	}
+
+	var now = s.timeNow()
+
+	for _, dir := range dirs {
+		if !dir.IsDir() || len(dir.Name()) != 36 { //nolint:mnd // UUID length
+			continue
+		}
+
+		sID := dir.Name()
+
+		sess, err := s.GetSession(ctx, sID)
+		if err != nil {
+			continue // skip expired / unreadable sessions
+		}
+
+		if sess.ExpiresAt.Before(now) {
+			continue
+		}
+
+		if sess.Slug == slug {
+			return sess, nil
+		}
+	}
+
+	return nil, ErrNotFound
+}
+
+// UpdateSession reads the stored session file, applies the non-nil patch fields, and writes
+// the result back. Returns ErrSessionNotFound when the session does not exist or has expired.
+func (s *FS) UpdateSession(ctx context.Context, sID string, patch SessionPatch) error { //nolint:cyclop
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return err
+	}
+
+	var now = s.timeNow()
+
+	filePath, expiresAt, sErr := s.findSessionFile(sID)
+	if sErr != nil {
+		if errors.Is(sErr, os.ErrNotExist) {
+			return ErrSessionNotFound
+		}
+
+		return sErr
+	} else if expiresAt.Before(now) {
+		if dErr := s.DeleteSession(ctx, sID); dErr != nil {
+			return dErr
+		}
+
+		return ErrSessionNotFound
+	}
+
+	// read existing session
+	var rawData []byte
+
+	if err := s.withLock(true, func() (err error) {
+		var f *os.File
+
+		if f, err = os.OpenFile(filePath, os.O_RDONLY, 0); err != nil {
+			return
+		}
+
+		defer func() { _ = f.Close() }()
+
+		rawData, err = io.ReadAll(f)
+
+		return f.Close()
+	}); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrSessionNotFound
+		}
+
+		return err
+	}
+
+	var sess Session
+	if err := s.encDec.Decode(rawData, &sess); err != nil {
+		return err
+	}
+
+	// apply patch
+	if patch.Code != nil {
+		sess.Code = *patch.Code
+	}
+
+	if patch.Slug != nil {
+		sess.Slug = *patch.Slug
+	}
+
+	if patch.GroupName != nil {
+		sess.GroupName = *patch.GroupName
+	}
+
+	if patch.ResponseScript != nil {
+		sess.ResponseScript = *patch.ResponseScript
+	}
+
+	if patch.ForwardURL != nil {
+		sess.ForwardURL = *patch.ForwardURL
+	}
+
+	if patch.Headers != nil {
+		sess.Headers = *patch.Headers
+	}
+
+	if patch.SecurityHeaders != nil {
+		sess.SecurityHeaders = *patch.SecurityHeaders
+	}
+
+	if patch.ResponseBody != nil {
+		sess.ResponseBody = *patch.ResponseBody
+	}
+
+	if patch.Delay != nil {
+		sess.Delay = *patch.Delay
+	}
+
+	if patch.LongLived != nil {
+		sess.LongLived = *patch.LongLived
+	}
+
+	// re-encode and overwrite the session file (same expiry filename, same content slot)
+	data, err := s.encDec.Encode(sess)
+	if err != nil {
+		return err
+	}
+
+	return s.withLock(false, func() error {
+		f, fErr := os.OpenFile(filePath, os.O_WRONLY|os.O_TRUNC, s.filePerm)
+		if fErr != nil {
+			return fErr
+		}
+
+		defer func() { _ = f.Close() }()
+
+		if _, wErr := f.Write(data); wErr != nil {
+			return wErr
+		}
+
+		return f.Close()
+	})
+}
+
+// ListSessions scans all session directories and returns a summary of each non-expired session.
+// SessionFilter.Group is an exact match on GroupName; SessionFilter.Query is a substring match
+// applied to session ID, Slug, and GroupName.
+func (s *FS) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummary, error) { //nolint:cyclop
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	var dirs []os.DirEntry
+
+	if err := s.withLock(true, func() (err error) { dirs, err = os.ReadDir(s.root); return }); err != nil {
+		return nil, err
+	}
+
+	var (
+		now     = s.timeNow()
+		results []SessionSummary
+	)
+
+	for _, dir := range dirs {
+		if !dir.IsDir() || len(dir.Name()) != 36 { //nolint:mnd // UUID length
+			continue
+		}
+
+		sID := dir.Name()
+
+		sess, err := s.GetSession(ctx, sID)
+		if err != nil || sess.ExpiresAt.Before(now) {
+			continue
+		}
+
+		// apply group filter
+		if f.Group != "" && sess.GroupName != f.Group {
+			continue
+		}
+
+		// apply query (substring) filter
+		if f.Query != "" {
+			if !strings.Contains(sID, f.Query) &&
+				!strings.Contains(sess.Slug, f.Query) &&
+				!strings.Contains(sess.GroupName, f.Query) {
+				continue
+			}
+		}
+
+		// count requests and find last-activity time
+		reqFiles, lErr := s.listRequestFiles(sID)
+		if lErr != nil {
+			continue
+		}
+
+		var lastReqTime int64
+
+		for _, rf := range reqFiles {
+			ts := rf.createdAt.UnixMilli()
+			if ts > lastReqTime {
+				lastReqTime = ts
+			}
+		}
+
+		results = append(results, SessionSummary{
+			ID:                   sID,
+			Slug:                 sess.Slug,
+			GroupName:            sess.GroupName,
+			Code:                 sess.Code,
+			RequestsCount:        len(reqFiles),
+			LastRequestUnixMilli: lastReqTime,
+			CreatedAtUnixMilli:   sess.CreatedAtUnixMilli,
+			ExpiresAtUnixMilli:   sess.ExpiresAt.UnixMilli(),
+			LongLived:            sess.LongLived,
+		})
+	}
+
+	return results, nil
+}
+
+// SearchRequests performs a non-indexed linear scan of all stored requests, checking headers
+// and JSON body fields against the query key/value pair. For high-volume indexed search, use
+// the SQLite driver instead.
+func (s *FS) SearchRequests(ctx context.Context, q IdentifierQuery) ([]RequestMatch, error) { //nolint:cyclop,funlen
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	var dirs []os.DirEntry
+
+	if err := s.withLock(true, func() (err error) { dirs, err = os.ReadDir(s.root); return }); err != nil {
+		return nil, err
+	}
+
+	var (
+		now     = s.timeNow()
+		results []RequestMatch
+	)
+
+	for _, dir := range dirs {
+		if q.Limit > 0 && len(results) >= q.Limit {
+			break
+		}
+
+		if !dir.IsDir() || len(dir.Name()) != 36 { //nolint:mnd // UUID length
+			continue
+		}
+
+		sID := dir.Name()
+
+		sess, err := s.GetSession(ctx, sID)
+		if err != nil || sess.ExpiresAt.Before(now) {
+			continue
+		}
+
+		// apply session-level filters
+		if q.SessionID != "" && q.SessionID != sID {
+			continue
+		}
+
+		if q.Group != "" && q.Group != sess.GroupName {
+			continue
+		}
+
+		// iterate requests
+		reqMap, rErr := s.GetAllRequests(ctx, sID)
+		if rErr != nil {
+			continue
+		}
+
+		for rID, req := range reqMap {
+			if q.Limit > 0 && len(results) >= q.Limit {
+				break
+			}
+
+			// apply time filters
+			if q.FromUnixMilli > 0 && req.CreatedAtUnixMilli < q.FromUnixMilli {
+				continue
+			}
+
+			if q.ToUnixMilli > 0 && req.CreatedAtUnixMilli > q.ToUnixMilli {
+				continue
+			}
+
+			// scan headers
+			var matched bool
+
+			for _, h := range req.Headers {
+				if identifierMatches(q, h.Name, h.Value) {
+					results = append(results, RequestMatch{
+						SessionID:           sID,
+						SessionSlug:         sess.Slug,
+						RequestID:           rID,
+						Key:                 h.Name,
+						Value:               h.Value,
+						CapturedAtUnixMilli: req.CreatedAtUnixMilli,
+					})
+					matched = true
+
+					break
+				}
+			}
+
+			if matched {
+				continue
+			}
+
+			// scan JSON body
+			if len(req.Body) > 0 {
+				var m map[string]any
+
+				if jErr := json.Unmarshal(req.Body, &m); jErr == nil {
+					for k, v := range m {
+						if identifierMatches(q, k, fmt.Sprintf("%v", v)) {
+							results = append(results, RequestMatch{
+								SessionID:           sID,
+								SessionSlug:         sess.Slug,
+								RequestID:           rID,
+								Key:                 k,
+								Value:               fmt.Sprintf("%v", v),
+								CapturedAtUnixMilli: req.CreatedAtUnixMilli,
+							})
+
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return results, nil
 }
 
 func (s *FS) Close() error {

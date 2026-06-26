@@ -52,6 +52,9 @@ func NewRedis(c redis.Cmdable, sTTL time.Duration, maxReq uint32, opts ...RedisO
 // sessionKey returns the key for the session data.
 func (*Redis) sessionKey(sID string) string { return "webhook-tester-v2:session:" + sID }
 
+// slugKey returns the Redis key that maps a slug to a session ID.
+func (*Redis) slugKey(slug string) string { return "webhook-tester-v2:slug:" + slug }
+
 // requestsKey returns the key for the requests list.
 func (s *Redis) requestsKey(sID string) string { return s.sessionKey(sID) + ":requests" }
 
@@ -101,6 +104,13 @@ func (s *Redis) NewSession(ctx context.Context, session Session, id ...string) (
 
 	if err := s.client.Set(ctx, s.sessionKey(sID), data, s.sessionTTL).Err(); err != nil {
 		return "", err
+	}
+
+	if session.Slug != "" {
+		// slug key shares the session TTL so it expires together
+		if err := s.client.Set(ctx, s.slugKey(session.Slug), sID, s.sessionTTL).Err(); err != nil {
+			return "", err
+		}
 	}
 
 	return sID, nil
@@ -187,12 +197,22 @@ func (s *Redis) DeleteSession(ctx context.Context, sID string) error {
 		return err // context is done
 	}
 
+	// read the session first so we can remove the slug key if one exists
+	sess, err := s.GetSession(ctx, sID)
+	if err != nil {
+		return err // ErrSessionNotFound or other
+	}
+
 	if result := s.client.Del(ctx, s.sessionKey(sID)); result.Err() != nil {
 		return result.Err()
 	} else if count, rErr := result.Result(); rErr != nil {
 		return rErr
 	} else if count == 0 {
 		return ErrSessionNotFound
+	}
+
+	if sess.Slug != "" {
+		_ = s.client.Del(ctx, s.slugKey(sess.Slug)).Err() // best-effort cleanup
 	}
 
 	return nil
@@ -402,4 +422,127 @@ func (s *Redis) DeleteAllRequests(ctx context.Context, sID string) error {
 	}
 
 	return nil
+}
+
+// GetSessionBySlug retrieves a session by its human-readable slug using the stored slug→ID key.
+// Returns ErrNotFound when the slug is empty or no mapping exists.
+func (s *Redis) GetSessionBySlug(ctx context.Context, slug string) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if slug == "" {
+		return nil, ErrNotFound
+	}
+
+	sID, err := s.client.Get(ctx, s.slugKey(slug)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, ErrNotFound
+		}
+
+		return nil, err
+	}
+
+	return s.GetSession(ctx, sID)
+}
+
+// UpdateSession reads the current session data, applies the non-nil patch fields, and stores
+// the result back. Returns ErrSessionNotFound when the session does not exist.
+func (s *Redis) UpdateSession(ctx context.Context, sID string, patch SessionPatch) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	sess, err := s.GetSession(ctx, sID)
+	if err != nil {
+		return err
+	}
+
+	oldSlug := sess.Slug
+
+	// apply patch
+	if patch.Code != nil {
+		sess.Code = *patch.Code
+	}
+
+	if patch.Slug != nil {
+		sess.Slug = *patch.Slug
+	}
+
+	if patch.GroupName != nil {
+		sess.GroupName = *patch.GroupName
+	}
+
+	if patch.ResponseScript != nil {
+		sess.ResponseScript = *patch.ResponseScript
+	}
+
+	if patch.ForwardURL != nil {
+		sess.ForwardURL = *patch.ForwardURL
+	}
+
+	if patch.Headers != nil {
+		sess.Headers = *patch.Headers
+	}
+
+	if patch.SecurityHeaders != nil {
+		sess.SecurityHeaders = *patch.SecurityHeaders
+	}
+
+	if patch.ResponseBody != nil {
+		sess.ResponseBody = *patch.ResponseBody
+	}
+
+	if patch.Delay != nil {
+		sess.Delay = *patch.Delay
+	}
+
+	if patch.LongLived != nil {
+		sess.LongLived = *patch.LongLived
+	}
+
+	data, mErr := s.encDec.Encode(sess)
+	if mErr != nil {
+		return mErr
+	}
+
+	// get remaining TTL to preserve it
+	currentTTL, tErr := s.client.PTTL(ctx, s.sessionKey(sID)).Result()
+	if tErr != nil {
+		return tErr
+	}
+
+	if currentTTL < 0 {
+		return ErrSessionNotFound
+	}
+
+	if err := s.client.Set(ctx, s.sessionKey(sID), data, currentTTL).Err(); err != nil {
+		return err
+	}
+
+	// maintain slug index
+	if oldSlug != sess.Slug {
+		if oldSlug != "" {
+			_ = s.client.Del(ctx, s.slugKey(oldSlug)).Err()
+		}
+
+		if sess.Slug != "" {
+			_ = s.client.Set(ctx, s.slugKey(sess.Slug), sID, currentTTL).Err()
+		}
+	}
+
+	return nil
+}
+
+// ListSessions is not supported by the Redis driver. Use the SQLite driver for listing sessions.
+// Returns ErrSearchUnsupported.
+func (s *Redis) ListSessions(_ context.Context, _ SessionFilter) ([]SessionSummary, error) {
+	return nil, ErrSearchUnsupported
+}
+
+// SearchRequests is not supported by the Redis driver. Use the SQLite driver for indexed search.
+// Returns ErrSearchUnsupported.
+func (s *Redis) SearchRequests(_ context.Context, _ IdentifierQuery) ([]RequestMatch, error) {
+	return nil, ErrSearchUnsupported
 }

@@ -502,6 +502,200 @@ func testRequestCreateReadDelete(
 	})
 }
 
+// testExtendedSessionOps tests the four new interface methods added in Task 2:
+// GetSessionBySlug, UpdateSession, ListSessions, and SearchRequests.
+// It is called for every local driver (inmemory, fs) that performs a full scan.
+func testExtendedSessionOps(
+	t *testing.T,
+	newImpl func(sessionTTL time.Duration, maxRequests uint32) storage.Storage,
+) {
+	t.Helper()
+
+	var ctx = context.Background()
+
+	t.Run("GetSessionBySlug - found and not found", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 10)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		// create session with a slug
+		sID, err := impl.NewSession(ctx, storage.Session{Code: 201, Slug: "my-slug"})
+		require.NoError(t, err)
+
+		// look it up by slug
+		got, err := impl.GetSessionBySlug(ctx, "my-slug")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, "my-slug", got.Slug)
+		require.Equal(t, uint16(201), got.Code)
+		_ = sID
+
+		// empty slug must return ErrNotFound
+		_, err = impl.GetSessionBySlug(ctx, "")
+		require.ErrorIs(t, err, storage.ErrNotFound)
+
+		// nonexistent slug must return ErrNotFound
+		_, err = impl.GetSessionBySlug(ctx, "does-not-exist")
+		require.ErrorIs(t, err, storage.ErrNotFound)
+	})
+
+	t.Run("UpdateSession - mutates a field", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 10)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		sID, err := impl.NewSession(ctx, storage.Session{Code: 200})
+		require.NoError(t, err)
+
+		var newCode uint16 = 404
+		var newSlug = "updated-slug"
+
+		require.NoError(t, impl.UpdateSession(ctx, sID, storage.SessionPatch{
+			Code: &newCode,
+			Slug: &newSlug,
+		}))
+
+		got, err := impl.GetSession(ctx, sID)
+		require.NoError(t, err)
+		require.Equal(t, uint16(404), got.Code)
+		require.Equal(t, "updated-slug", got.Slug)
+
+		// update non-existent session
+		require.ErrorIs(t, impl.UpdateSession(ctx, "nonexistent", storage.SessionPatch{}), storage.ErrSessionNotFound)
+	})
+
+	t.Run("ListSessions - returns summaries with request count", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 10)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		sID, err := impl.NewSession(ctx, storage.Session{Code: 200, GroupName: "grp-test"})
+		require.NoError(t, err)
+
+		// add two requests
+		_, err = impl.NewRequest(ctx, sID, storage.Request{ClientAddr: "1.2.3.4"})
+		require.NoError(t, err)
+		_, err = impl.NewRequest(ctx, sID, storage.Request{ClientAddr: "5.6.7.8"})
+		require.NoError(t, err)
+
+		// list all sessions – at least our session should appear
+		list, err := impl.ListSessions(ctx, storage.SessionFilter{})
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(list), 1)
+
+		var found *storage.SessionSummary
+
+		for i := range list {
+			if list[i].ID == sID {
+				found = &list[i]
+
+				break
+			}
+		}
+
+		require.NotNil(t, found, "our session should appear in ListSessions")
+		require.Equal(t, 2, found.RequestsCount)
+		assert.NotZero(t, found.LastRequestUnixMilli)
+		assert.NotZero(t, found.CreatedAtUnixMilli)
+		assert.NotZero(t, found.ExpiresAtUnixMilli)
+
+		// group filter: matching group
+		filtered, err := impl.ListSessions(ctx, storage.SessionFilter{Group: "grp-test"})
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(filtered), 1)
+
+		var filteredFound bool
+
+		for _, s := range filtered {
+			if s.ID == sID {
+				filteredFound = true
+
+				break
+			}
+		}
+
+		require.True(t, filteredFound)
+
+		// group filter: non-matching group
+		none, err := impl.ListSessions(ctx, storage.SessionFilter{Group: "no-such-group"})
+		require.NoError(t, err)
+		require.Empty(t, none)
+	})
+
+	t.Run("SearchRequests - no error on empty store", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 10)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		matches, err := impl.SearchRequests(ctx, storage.IdentifierQuery{
+			Key:   "X-Trace-ID",
+			Value: "abc",
+			Match: storage.IdentifierMatchExact,
+			Limit: 10,
+		})
+		require.NoError(t, err)
+		require.Empty(t, matches)
+	})
+
+	t.Run("SearchRequests - exact header match", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 10)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		sID, err := impl.NewSession(ctx, storage.Session{Code: 200, Slug: "search-sess"})
+		require.NoError(t, err)
+
+		_, err = impl.NewRequest(ctx, sID, storage.Request{
+			Headers: []storage.HttpHeader{
+				{Name: "X-Trace-ID", Value: "abc123"},
+				{Name: "Content-Type", Value: "application/json"},
+			},
+			Body: []byte(`{"event":"user.created","userId":"u-99"}`),
+		})
+		require.NoError(t, err)
+
+		// exact match on a header
+		matches, err := impl.SearchRequests(ctx, storage.IdentifierQuery{
+			Key:   "X-Trace-ID",
+			Value: "abc123",
+			Match: storage.IdentifierMatchExact,
+			Limit: 10,
+		})
+		require.NoError(t, err)
+		require.Len(t, matches, 1)
+		require.Equal(t, "X-Trace-ID", matches[0].Key)
+		require.Equal(t, "abc123", matches[0].Value)
+		require.Equal(t, sID, matches[0].SessionID)
+		require.Equal(t, "search-sess", matches[0].SessionSlug)
+		require.NotEmpty(t, matches[0].RequestID)
+
+		// prefix match on a header value
+		prefixMatches, err := impl.SearchRequests(ctx, storage.IdentifierQuery{
+			Key:   "X-Trace-ID",
+			Value: "abc",
+			Match: storage.IdentifierMatchPrefix,
+			Limit: 10,
+		})
+		require.NoError(t, err)
+		require.Len(t, prefixMatches, 1)
+
+		// no match
+		noMatch, err := impl.SearchRequests(ctx, storage.IdentifierQuery{
+			Key:   "X-Trace-ID",
+			Value: "xyz",
+			Match: storage.IdentifierMatchExact,
+			Limit: 10,
+		})
+		require.NoError(t, err)
+		require.Empty(t, noMatch)
+	})
+}
+
 func testRaceProvocation(
 	t *testing.T,
 	new func(sessionTTL time.Duration, maxRequests uint32) storage.Storage,

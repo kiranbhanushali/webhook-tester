@@ -78,3 +78,13 @@ func TestFS_RaceProvocation(t *testing.T) {
 		return storage.NewFS(t.TempDir(), sTTL, maxReq, storage.WithFSCleanupInterval(10*time.Nanosecond))
 	})
 }
+
+func TestFS_ExtendedSessionOps(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testExtendedSessionOps(t, func(sTTL time.Duration, maxReq uint32) storage.Storage {
+		return storage.NewFS(t.TempDir(), sTTL, maxReq, storage.WithFSTimeNow(ft.Get))
+	})
+}

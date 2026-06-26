@@ -2,10 +2,12 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +20,7 @@ type (
 		sessionTTL      time.Duration
 		maxRequests     uint32
 		sessions        syncMap[ /* sID */ string, *sessionData]
+		slugs           syncMap[ /* slug */ string, /* sID */ string] // slug → session ID index
 		cleanupInterval time.Duration
 
 		// this function returns the current time, it's used to mock the time in tests
@@ -175,6 +178,10 @@ func (s *InMemory) NewSession(ctx context.Context, session Session, id ...string
 
 	s.sessions.Store(sID, &sessionData{session: session})
 
+	if session.Slug != "" {
+		s.slugs.Store(session.Slug, sID)
+	}
+
 	return
 }
 
@@ -227,14 +234,24 @@ func (s *InMemory) DeleteSession(ctx context.Context, sID string) error {
 		return err
 	}
 
-	if data, ok := s.sessions.LoadAndDelete(sID); !ok {
+	data, ok := s.sessions.LoadAndDelete(sID)
+	if !ok {
 		return ErrSessionNotFound // session not found
-	} else {
-		data.requests.Range(func(rID string, _ Request) bool { // delete all session requests
-			data.requests.Delete(rID)
+	}
 
-			return true
-		})
+	data.requests.Range(func(rID string, _ Request) bool { // delete all session requests
+		data.requests.Delete(rID)
+
+		return true
+	})
+
+	// remove slug index entry
+	data.Lock()
+	slug := data.session.Slug
+	data.Unlock()
+
+	if slug != "" {
+		s.slugs.Delete(slug)
 	}
 
 	return nil
@@ -373,6 +390,295 @@ func (s *InMemory) DeleteAllRequests(ctx context.Context, sID string) error {
 	})
 
 	return nil
+}
+
+// GetSessionBySlug looks up a session by its human-readable slug using the in-memory slug index.
+// Returns ErrNotFound when slug is empty or no session has that slug.
+func (s *InMemory) GetSessionBySlug(ctx context.Context, slug string) (*Session, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if slug == "" {
+		return nil, ErrNotFound
+	}
+
+	sID, ok := s.slugs.Load(slug)
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	return s.GetSession(ctx, sID)
+}
+
+// UpdateSession applies the non-nil fields of patch to the session with the given ID.
+// Only the fields that are set (non-nil pointer) in patch are updated; others remain unchanged.
+// Returns ErrSessionNotFound when the session does not exist.
+func (s *InMemory) UpdateSession(ctx context.Context, sID string, patch SessionPatch) error {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return err
+	}
+
+	if !s.isSessionExists(sID) {
+		return ErrSessionNotFound
+	}
+
+	data, ok := s.sessions.Load(sID)
+	if !ok {
+		return ErrSessionNotFound
+	}
+
+	data.Lock()
+	defer data.Unlock()
+
+	oldSlug := data.session.Slug
+
+	if patch.Code != nil {
+		data.session.Code = *patch.Code
+	}
+
+	if patch.Slug != nil {
+		data.session.Slug = *patch.Slug
+	}
+
+	if patch.GroupName != nil {
+		data.session.GroupName = *patch.GroupName
+	}
+
+	if patch.ResponseScript != nil {
+		data.session.ResponseScript = *patch.ResponseScript
+	}
+
+	if patch.ForwardURL != nil {
+		data.session.ForwardURL = *patch.ForwardURL
+	}
+
+	if patch.Headers != nil {
+		data.session.Headers = *patch.Headers
+	}
+
+	if patch.SecurityHeaders != nil {
+		data.session.SecurityHeaders = *patch.SecurityHeaders
+	}
+
+	if patch.ResponseBody != nil {
+		data.session.ResponseBody = *patch.ResponseBody
+	}
+
+	if patch.Delay != nil {
+		data.session.Delay = *patch.Delay
+	}
+
+	if patch.LongLived != nil {
+		data.session.LongLived = *patch.LongLived
+	}
+
+	newSlug := data.session.Slug
+
+	// maintain slug index: remove old, add new (if changed)
+	if oldSlug != newSlug {
+		if oldSlug != "" {
+			s.slugs.Delete(oldSlug)
+		}
+
+		if newSlug != "" {
+			s.slugs.Store(newSlug, sID)
+		}
+	}
+
+	return nil
+}
+
+// ListSessions returns a summary of all non-expired sessions, optionally filtered by f.
+// SessionFilter.Group performs an exact match on GroupName; SessionFilter.Query is a
+// substring match applied to ID, Slug, and GroupName.
+func (s *InMemory) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummary, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	var (
+		now     = s.timeNow()
+		results []SessionSummary
+	)
+
+	s.sessions.Range(func(sID string, data *sessionData) bool {
+		data.Lock()
+		sess := data.session
+		expiresAt := sess.ExpiresAt
+		data.Unlock()
+
+		if expiresAt.Before(now) {
+			return true // skip expired
+		}
+
+		// apply group filter
+		if f.Group != "" && sess.GroupName != f.Group {
+			return true
+		}
+
+		// apply query (substring) filter
+		if f.Query != "" {
+			if !strings.Contains(sID, f.Query) &&
+				!strings.Contains(sess.Slug, f.Query) &&
+				!strings.Contains(sess.GroupName, f.Query) {
+				return true
+			}
+		}
+
+		// count requests and find last-activity time
+		var (
+			reqCount    int
+			lastReqTime int64
+		)
+
+		data.requests.Range(func(_ string, req Request) bool {
+			reqCount++
+
+			if req.CreatedAtUnixMilli > lastReqTime {
+				lastReqTime = req.CreatedAtUnixMilli
+			}
+
+			return true
+		})
+
+		results = append(results, SessionSummary{
+			ID:                   sID,
+			Slug:                 sess.Slug,
+			GroupName:            sess.GroupName,
+			Code:                 sess.Code,
+			RequestsCount:        reqCount,
+			LastRequestUnixMilli: lastReqTime,
+			CreatedAtUnixMilli:   sess.CreatedAtUnixMilli,
+			ExpiresAtUnixMilli:   expiresAt.UnixMilli(),
+			LongLived:            sess.LongLived,
+		})
+
+		return true
+	})
+
+	return results, nil
+}
+
+// SearchRequests performs a non-indexed linear scan of all stored requests, matching headers and
+// JSON body fields against the query key/value pair. For high-volume indexed search, use the
+// SQLite driver instead.
+func (s *InMemory) SearchRequests(ctx context.Context, q IdentifierQuery) ([]RequestMatch, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	var (
+		now     = s.timeNow()
+		results []RequestMatch
+		done    bool
+	)
+
+	s.sessions.Range(func(sID string, data *sessionData) bool {
+		if done {
+			return false
+		}
+
+		data.Lock()
+		sess := data.session
+		expiresAt := sess.ExpiresAt
+		data.Unlock()
+
+		if expiresAt.Before(now) {
+			return true // skip expired
+		}
+
+		// apply session-level filters
+		if q.SessionID != "" && q.SessionID != sID {
+			return true
+		}
+
+		if q.Group != "" && q.Group != sess.GroupName {
+			return true
+		}
+
+		data.requests.Range(func(rID string, req Request) bool {
+			if done {
+				return false
+			}
+
+			// apply time filters
+			if q.FromUnixMilli > 0 && req.CreatedAtUnixMilli < q.FromUnixMilli {
+				return true
+			}
+
+			if q.ToUnixMilli > 0 && req.CreatedAtUnixMilli > q.ToUnixMilli {
+				return true
+			}
+
+			// scan headers for a matching key/value pair
+			for _, h := range req.Headers {
+				if identifierMatches(q, h.Name, h.Value) {
+					results = append(results, RequestMatch{
+						SessionID:           sID,
+						SessionSlug:         sess.Slug,
+						RequestID:           rID,
+						Key:                 h.Name,
+						Value:               h.Value,
+						CapturedAtUnixMilli: req.CreatedAtUnixMilli,
+					})
+
+					if q.Limit > 0 && len(results) >= q.Limit {
+						done = true
+					}
+
+					return !done
+				}
+			}
+
+			// scan JSON body for matching top-level string fields
+			if len(req.Body) > 0 {
+				var m map[string]any
+
+				if err := json.Unmarshal(req.Body, &m); err == nil {
+					for k, v := range m {
+						if identifierMatches(q, k, fmt.Sprintf("%v", v)) {
+							results = append(results, RequestMatch{
+								SessionID:           sID,
+								SessionSlug:         sess.Slug,
+								RequestID:           rID,
+								Key:                 k,
+								Value:               fmt.Sprintf("%v", v),
+								CapturedAtUnixMilli: req.CreatedAtUnixMilli,
+							})
+
+							if q.Limit > 0 && len(results) >= q.Limit {
+								done = true
+
+								return false
+							}
+						}
+					}
+				}
+			}
+
+			return true
+		})
+
+		return !done
+	})
+
+	return results, nil
+}
+
+// identifierMatches reports whether the given key matches q.Key (if set) and the value
+// satisfies the q.Match condition against q.Value.
+func identifierMatches(q IdentifierQuery, key, value string) bool {
+	if q.Key != "" && key != q.Key {
+		return false
+	}
+
+	switch q.Match {
+	case IdentifierMatchPrefix:
+		return strings.HasPrefix(value, q.Value)
+	default: // IdentifierMatchExact or zero value
+		return value == q.Value
+	}
 }
 
 // Close closes the storage and stops the cleanup goroutine. Any further calls to the storage methods will
