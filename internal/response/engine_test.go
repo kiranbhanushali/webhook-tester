@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,21 @@ func TestRender_StatusDirective(t *testing.T) {
 	got, err := response.Render(
 		context.Background(),
 		"@status 201\n{\"ok\":true}",
+		response.Request{},
+		time.Second,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 201, got.Status)
+	assert.Equal(t, `{"ok":true}`, string(got.Body))
+}
+
+func TestRender_StatusDirective_CRLF(t *testing.T) {
+	t.Parallel()
+
+	got, err := response.Render(
+		context.Background(),
+		"@status 201\r\n{\"ok\":true}",
 		response.Request{},
 		time.Second,
 	)
@@ -120,6 +136,22 @@ func TestRender_StatusDirective_InvalidCode_NotStripped(t *testing.T) {
 	assert.Equal(t, "@status 99\nfoo", string(got.Body))
 }
 
+func TestRender_StatusDirective_OutOfRangeUpper_NotStripped(t *testing.T) {
+	t.Parallel()
+
+	// @status above the valid 100–599 range is treated as regular body text.
+	got, err := response.Render(
+		context.Background(),
+		"@status 999\nfoo",
+		response.Request{},
+		time.Second,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, got.Status)
+	assert.Equal(t, "@status 999\nfoo", string(got.Body))
+}
+
 func TestRender_JSONPath(t *testing.T) {
 	t.Parallel()
 
@@ -163,10 +195,9 @@ func TestRender_HelperFuncs_Smoke(t *testing.T) {
 			script: `{{ sha256 "abc" }}`,
 			check: func(t *testing.T, body string) {
 				t.Helper()
-				// Compute the expected value using the stdlib so the test stays
-				// correct regardless of platform and does not embed a hardcoded vector.
-				h := sha256.Sum256([]byte("abc"))
-				assert.Equal(t, hex.EncodeToString(h[:]), body)
+				// Known NIST test vector for SHA-256("abc"); asserting against this
+				// literal proves correctness rather than impl-vs-impl tautology.
+				assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", body)
 			},
 		},
 		{
@@ -213,4 +244,69 @@ func TestRender_HelperFuncs_Smoke(t *testing.T) {
 			tc.check(t, string(got.Body))
 		})
 	}
+}
+
+func TestRender_RandInt_WithinRange(t *testing.T) {
+	t.Parallel()
+
+	const (
+		min = 5
+		max = 10
+	)
+
+	// Sample repeatedly to gain confidence the result stays within [min, max).
+	for range 50 {
+		got, err := response.Render(
+			context.Background(),
+			`{{ randInt 5 10 }}`,
+			response.Request{},
+			time.Second,
+		)
+		require.NoError(t, err)
+
+		n, convErr := strconv.Atoi(string(got.Body))
+		require.NoError(t, convErr)
+		assert.GreaterOrEqual(t, n, min)
+		assert.Less(t, n, max)
+	}
+}
+
+func TestRender_RandInt_MinNotLessThanMax_Errors(t *testing.T) {
+	t.Parallel()
+
+	// min == max and min > max must both surface an execute error.
+	for _, script := range []string{`{{ randInt 7 7 }}`, `{{ randInt 9 4 }}`} {
+		_, err := response.Render(context.Background(), script, response.Request{}, time.Second)
+		require.Error(t, err, "script %q should error", script)
+	}
+}
+
+func TestRender_Now(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default RFC3339 is non-empty and parseable", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := response.Render(context.Background(), `{{ now }}`, response.Request{}, time.Second)
+		require.NoError(t, err)
+
+		body := string(got.Body)
+		assert.NotEmpty(t, body)
+
+		_, parseErr := time.Parse(time.RFC3339, body)
+		assert.NoError(t, parseErr, "default now output should parse as RFC3339: %q", body)
+	})
+
+	t.Run("custom layout is honored", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := response.Render(context.Background(), `{{ now "2006" }}`, response.Request{}, time.Second)
+		require.NoError(t, err)
+
+		body := string(got.Body)
+		assert.Len(t, body, 4, "year layout should render 4 digits: %q", body)
+
+		_, parseErr := strconv.Atoi(body)
+		assert.NoError(t, parseErr, "year layout should be all digits: %q", body)
+	})
 }

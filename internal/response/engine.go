@@ -108,6 +108,14 @@ func Render(ctx context.Context, script string, req Request, timeout time.Durati
 
 	ch := make(chan execResult, 1)
 
+	// NOTE: text/template offers no way to interrupt Execute mid-run. The execCtx is
+	// only observed at I/O boundaries (limitedBuffer.Write checks ctx on every write),
+	// so a template that loops without producing output (e.g. `{{ range seq N }}{{ end }}`
+	// with no body writes) can keep burning CPU past the timeout until it returns on its
+	// own. There is no permanent goroutine leak — the channel is buffered (size 1) so the
+	// goroutine always completes its send and exits — but compute is NOT hard-bounded.
+	// Task 8 should keep scripts trusted/short and treat the timeout as a best-effort wall
+	// clock for the response, not a guaranteed CPU cap.
 	go func() {
 		w := &limitedBuffer{ctx: execCtx, limit: maxOutputBytes}
 
@@ -153,6 +161,10 @@ func buildData(req Request) templateData {
 }
 
 // parseResult inspects rendered output for a leading @status directive.
+//
+// Both LF and CRLF line endings are supported: a trailing "\r" is trimmed from
+// the first line before parsing, and because the "\r" belongs to the first line
+// (it precedes the "\n"), the remaining body never carries a stray leading "\r".
 func parseResult(out []byte) Result {
 	s := string(out)
 
@@ -166,6 +178,8 @@ func parseResult(out []byte) Result {
 	} else {
 		firstLine = s
 	}
+
+	firstLine = strings.TrimRight(firstLine, "\r")
 
 	if code, ok := parseStatusDirective(firstLine); ok {
 		return Result{Status: code, Body: []byte(rest)}
