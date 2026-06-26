@@ -140,6 +140,14 @@ func TestSQLite_SearchExactAndPrefix(t *testing.T) {
 	rID2, err := s.NewRequest(ctx, sID, storage.Request{Body: []byte(`{"trackingId":"ABZ999"}`)})
 	require.NoError(t, err)
 
+	// values exercising literal '_' handling in prefix search
+	for _, v := range []string{"TXN_123", "TXNX123", "TXNA45"} {
+		ft.Add(time.Millisecond)
+
+		_, rErr := s.NewRequest(ctx, sID, storage.Request{Body: []byte(`{"refId":"` + v + `"}`)})
+		require.NoError(t, rErr)
+	}
+
 	t.Run("exact match", func(t *testing.T) {
 		m, sErr := s.SearchRequests(ctx, storage.IdentifierQuery{Key: "trackingId", Value: "ABC123"})
 		require.NoError(t, sErr)
@@ -170,6 +178,33 @@ func TestSQLite_SearchExactAndPrefix(t *testing.T) {
 		require.Len(t, m, 2)
 		require.Equal(t, "ABZ999", m[0].Value) // newest first
 		require.Equal(t, rID2, m[0].RequestID)
+	})
+
+	t.Run("prefix is case sensitive", func(t *testing.T) {
+		// lower-case prefix must NOT match the stored upper-case "ABC123"
+		m, sErr := s.SearchRequests(ctx, storage.IdentifierQuery{
+			Key: "trackingId", Value: "abc", Match: storage.IdentifierMatchPrefix,
+		})
+		require.NoError(t, sErr)
+		require.Empty(t, m)
+	})
+
+	t.Run("prefix underscore is literal not wildcard", func(t *testing.T) {
+		// "TXN_1" matches only "TXN_123"; "TXNX123" must NOT match ('_' is literal now)
+		m, sErr := s.SearchRequests(ctx, storage.IdentifierQuery{
+			Key: "refId", Value: "TXN_1", Match: storage.IdentifierMatchPrefix,
+		})
+		require.NoError(t, sErr)
+		require.Len(t, m, 1)
+		require.Equal(t, "TXN_123", m[0].Value)
+
+		// "TXN_" matches "TXN_123" but not "TXNA45"
+		m, sErr = s.SearchRequests(ctx, storage.IdentifierQuery{
+			Key: "refId", Value: "TXN_", Match: storage.IdentifierMatchPrefix,
+		})
+		require.NoError(t, sErr)
+		require.Len(t, m, 1)
+		require.Equal(t, "TXN_123", m[0].Value)
 	})
 
 	t.Run("limit caps results", func(t *testing.T) {

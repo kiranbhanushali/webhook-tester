@@ -664,12 +664,14 @@ func buildSearchQuery(query IdentifierQuery, now int64) (string, []any) {
 	}
 
 	if query.Match == IdentifierMatchPrefix {
-		conds = append(conds, "ri.value LIKE ? || '%'")
+		// Wildcard-free, BINARY (case-sensitive) prefix match: '_' and '%' in the value
+		// are matched literally, unlike LIKE. Bind the prefix value twice.
+		conds = append(conds, "substr(ri.value, 1, length(?)) = ?")
+		args = append(args, query.Value, query.Value)
 	} else {
 		conds = append(conds, "ri.value = ?")
+		args = append(args, query.Value)
 	}
-
-	args = append(args, query.Value)
 
 	if query.SessionID != "" {
 		conds = append(conds, "ri.session_id = ?")
