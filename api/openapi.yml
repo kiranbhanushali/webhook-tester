@@ -294,7 +294,7 @@ components:
         headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
         delay: {type: integer, description: Delay in seconds, maximum: 30, example: 5, x-go-type: uint16}
         response_body_base64: {$ref: '#/components/schemas/Base64Encoded'}
-        slug: {type: string, minLength: 1, maxLength: 50, example: my-session, description: Human-readable session slug}
+        slug: {type: string, minLength: 1, maxLength: 49, example: my-session, description: Human-readable session slug}
         group: {type: string, minLength: 1, maxLength: 100, example: team-a, description: Group name for organising sessions}
         response_script: {type: string, maxLength: 20000, example: '', description: Go text/template script for dynamic responses}
         security_headers:
@@ -341,7 +341,7 @@ components:
         headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
         delay: {type: integer, description: Delay in seconds, maximum: 30, example: 5, x-go-type: uint16}
         response_body_base64: {$ref: '#/components/schemas/Base64Encoded'}
-        slug: {type: string, minLength: 1, maxLength: 50, example: my-session}
+        slug: {type: string, minLength: 1, maxLength: 49, example: my-session}
         group: {type: string, minLength: 1, maxLength: 100, example: team-a}
         response_script: {type: string, maxLength: 20000, example: ''}
         security_headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
@@ -550,10 +550,7 @@ components:
               uuid: {$ref: '#/components/schemas/UUID'}
               response: {$ref: '#/components/schemas/SessionResponseOptions'}
               created_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
-              slug: {type: string, example: my-session}
-              group: {type: string, example: team-a}
               expires_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
-              long_lived: {type: boolean, example: false}
             required: [uuid, response, created_at_unix_milli]
             additionalProperties: false
 
