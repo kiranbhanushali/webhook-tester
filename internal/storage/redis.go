@@ -524,11 +524,13 @@ func (s *Redis) UpdateSession(ctx context.Context, sID string, patch SessionPatc
 	// maintain slug index
 	if oldSlug != sess.Slug {
 		if oldSlug != "" {
-			_ = s.client.Del(ctx, s.slugKey(oldSlug)).Err()
+			_ = s.client.Del(ctx, s.slugKey(oldSlug)).Err() // cleanup, best-effort
 		}
 
 		if sess.Slug != "" {
-			_ = s.client.Set(ctx, s.slugKey(sess.Slug), sID, currentTTL).Err()
+			if err := s.client.Set(ctx, s.slugKey(sess.Slug), sID, currentTTL).Err(); err != nil {
+				return fmt.Errorf("updating slug index: %w", err)
+			}
 		}
 	}
 

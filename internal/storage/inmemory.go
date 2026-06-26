@@ -666,21 +666,6 @@ func (s *InMemory) SearchRequests(ctx context.Context, q IdentifierQuery) ([]Req
 	return results, nil
 }
 
-// identifierMatches reports whether the given key matches q.Key (if set) and the value
-// satisfies the q.Match condition against q.Value.
-func identifierMatches(q IdentifierQuery, key, value string) bool {
-	if q.Key != "" && key != q.Key {
-		return false
-	}
-
-	switch q.Match {
-	case IdentifierMatchPrefix:
-		return strings.HasPrefix(value, q.Value)
-	default: // IdentifierMatchExact or zero value
-		return value == q.Value
-	}
-}
-
 // Close closes the storage and stops the cleanup goroutine. Any further calls to the storage methods will
 // return ErrClosed.
 func (s *InMemory) Close() error {
