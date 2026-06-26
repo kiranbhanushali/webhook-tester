@@ -23,12 +23,12 @@ func New(appCtx context.Context, db storage.Storage, pub pubsub.Publisher[pubsub
 }
 
 func (h *Handler) Handle(ctx context.Context, sID sID) (*openapi.SuccessfulOperationResponse, error) {
-	if err := h.db.DeleteAllRequests(ctx, sID.String()); err != nil {
+	if err := h.db.DeleteAllRequests(ctx, sID); err != nil {
 		return nil, err
 	}
 
 	// notify the subscribers
-	if err := h.pub.Publish(h.appCtx, sID.String(), pubsub.RequestEvent{Action: pubsub.RequestActionClear}); err != nil { //nolint:contextcheck,lll
+	if err := h.pub.Publish(h.appCtx, sID, pubsub.RequestEvent{Action: pubsub.RequestActionClear}); err != nil { //nolint:contextcheck,lll
 		return nil, err
 	}
 

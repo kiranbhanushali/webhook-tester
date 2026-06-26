@@ -16,7 +16,7 @@ type (
 func New(db storage.Storage) *Handler { return &Handler{db: db} }
 
 func (h *Handler) Handle(ctx context.Context, sID sID) (*openapi.SuccessfulOperationResponse, error) {
-	if err := h.db.DeleteSession(ctx, sID.String()); err != nil {
+	if err := h.db.DeleteSession(ctx, sID); err != nil {
 		return nil, err
 	}
 

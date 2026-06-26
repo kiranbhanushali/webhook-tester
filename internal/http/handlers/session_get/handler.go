@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/openapi"
 	"gh.tarampamp.am/webhook-tester/v2/internal/storage"
 )
@@ -18,7 +20,7 @@ type (
 func New(db storage.Storage) *Handler { return &Handler{db: db} }
 
 func (h *Handler) Handle(ctx context.Context, sID sID) (*openapi.SessionOptionsResponse, error) {
-	sess, sErr := h.db.GetSession(ctx, sID.String())
+	sess, sErr := h.db.GetSession(ctx, sID)
 	if sErr != nil {
 		return nil, fmt.Errorf("failed to get session: %w", sErr)
 	}
@@ -28,6 +30,10 @@ func (h *Handler) Handle(ctx context.Context, sID sID) (*openapi.SessionOptionsR
 		sHeaders[i].Name, sHeaders[i].Value = header.Name, header.Value
 	}
 
+	// Parse the session reference as UUID; for slug-based lookups the UUID lookup will be
+	// handled properly in a later task — until then the UUID field carries the parsed value.
+	sUUID, _ := uuid.Parse(sID)
+
 	return &openapi.SessionOptionsResponse{
 		CreatedAtUnixMilli: sess.CreatedAtUnixMilli,
 		Response: openapi.SessionResponseOptions{
@@ -36,6 +42,6 @@ func (h *Handler) Handle(ctx context.Context, sID sID) (*openapi.SessionOptionsR
 			ResponseBodyBase64: base64.StdEncoding.EncodeToString(sess.ResponseBody),
 			StatusCode:         openapi.StatusCode(sess.Code),
 		},
-		Uuid: sID,
+		Uuid: sUUID,
 	}, nil
 }

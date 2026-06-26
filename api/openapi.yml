@@ -21,6 +21,35 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/SettingsResponse'}
 
+  /api/sessions:
+    get:
+      summary: List all sessions
+      tags: [api]
+      operationId: apiSessionsList
+      parameters:
+        - name: group
+          in: query
+          required: false
+          schema: {type: string, description: Filter by group name}
+      responses:
+        '200': {$ref: '#/components/responses/SessionsListResponse'}
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/search:
+    get:
+      summary: Search across captured request identifiers
+      tags: [api]
+      operationId: apiSearch
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, description: Search query}
+      responses:
+        '200': {$ref: '#/components/responses/SearchResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
   /api/session:
     post:
       summary: Create a new session
@@ -50,6 +79,18 @@ paths:
       parameters: [{$ref: '#/components/parameters/SessionUUIDInPath'}]
       responses:
         '200': {$ref: '#/components/responses/SessionOptionsResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+    patch:
+      summary: Update session options (by UUID or slug)
+      tags: [api]
+      operationId: apiSessionUpdate
+      parameters: [{$ref: '#/components/parameters/SessionUUIDInPath'}]
+      requestBody: {$ref: '#/components/requestBodies/UpdateSessionRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/SessionOptionsResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request
         '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
         '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
 
@@ -132,6 +173,21 @@ paths:
         - {$ref: '#/components/parameters/RequestUUIDInPath'}
       responses:
         '200': {$ref: '#/components/responses/SuccessfulOperationResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
+  /api/session/{session_uuid}/requests/{request_uuid}/replay:
+    post:
+      summary: Replay a captured request to a target URL
+      tags: [api]
+      operationId: apiSessionReplayRequest
+      parameters:
+        - {$ref: '#/components/parameters/SessionUUIDInPath'}
+        - {$ref: '#/components/parameters/RequestUUIDInPath'}
+      requestBody: {$ref: '#/components/requestBodies/ReplayRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ReplayResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request
         '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
         '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
 
@@ -238,7 +294,80 @@ components:
         headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
         delay: {type: integer, description: Delay in seconds, maximum: 30, example: 5, x-go-type: uint16}
         response_body_base64: {$ref: '#/components/schemas/Base64Encoded'}
+        slug: {type: string, minLength: 1, maxLength: 50, example: my-session, description: Human-readable session slug}
+        group: {type: string, minLength: 1, maxLength: 100, example: team-a, description: Group name for organising sessions}
+        response_script: {type: string, maxLength: 20000, example: '', description: Go text/template script for dynamic responses}
+        security_headers:
+          type: array
+          items: {$ref: '#/components/schemas/HttpHeader'}
+          description: Additional security headers to add to every captured-request response
+        forward_url: {type: string, example: 'https://example.com/webhook', description: Forward incoming requests to this URL}
+        long_lived: {type: boolean, example: false, description: If true the session does not expire on the normal TTL}
       required: [status_code, headers, delay, response_body_base64]
+      additionalProperties: false
+
+    SessionSummary:
+      description: Summary information about a session
+      type: object
+      properties:
+        slug: {type: string, example: my-session}
+        group: {type: string, example: team-a}
+        status_code: {$ref: '#/components/schemas/StatusCode'}
+        requests_count: {type: integer, x-go-type: uint32, example: 42}
+        last_request_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+        created_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+        expires_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+        long_lived: {type: boolean, example: false}
+      required: [slug, status_code, requests_count, created_at_unix_milli, expires_at_unix_milli, long_lived]
+      additionalProperties: false
+
+    SearchResultItem:
+      description: A single search result linking a matched identifier to its captured request
+      type: object
+      properties:
+        session_slug: {type: string, example: my-session}
+        request_uuid: {$ref: '#/components/schemas/UUID'}
+        key: {type: string, example: txn_id, description: The identifier key that matched the query}
+        value: {type: string, example: abc-123, description: The identifier value that matched the query}
+        captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+      required: [session_slug, request_uuid, key, value, captured_at_unix_milli]
+      additionalProperties: false
+
+    UpdateSessionRequest:
+      description: Fields to update on a session (all optional; omitted fields are left unchanged)
+      type: object
+      properties:
+        status_code: {$ref: '#/components/schemas/StatusCode'}
+        headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        delay: {type: integer, description: Delay in seconds, maximum: 30, example: 5, x-go-type: uint16}
+        response_body_base64: {$ref: '#/components/schemas/Base64Encoded'}
+        slug: {type: string, minLength: 1, maxLength: 50, example: my-session}
+        group: {type: string, minLength: 1, maxLength: 100, example: team-a}
+        response_script: {type: string, maxLength: 20000, example: ''}
+        security_headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        forward_url: {type: string, example: 'https://example.com/webhook'}
+        long_lived: {type: boolean, example: false}
+      additionalProperties: false
+
+    ReplayRequest:
+      description: Options for replaying a captured request to a target URL
+      type: object
+      properties:
+        target_url:
+          type: string
+          description: URL to replay the captured request to
+          example: 'https://example.com/webhook'
+      required: [target_url]
+      additionalProperties: false
+
+    ReplayResponse:
+      description: Response received when replaying a captured request
+      type: object
+      properties:
+        status_code: {$ref: '#/components/schemas/StatusCode'}
+        headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        body_base64: {$ref: '#/components/schemas/Base64Encoded'}
+      required: [status_code, headers, body_base64]
       additionalProperties: false
 
     AppSettings:
@@ -321,14 +450,13 @@ components:
 
   parameters: # --------------------------------------------- PARAMETERS ----------------------------------------------
     SessionUUIDInPath:
-      description: Session UUID (version 4)
+      description: Session reference — UUID (version 4) or human-readable slug
       name: session_uuid
       in: path
       required: true
       schema:
         type: string
-        format: uuid
-        pattern: '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+        pattern: '^[a-z0-9][a-z0-9-]{1,48}$|^[0-9a-fA-F-]{36}$'
         example: 9b6bbab9-c197-4dd3-bc3f-3cb6253820c7
 
     RequestUUIDInPath:
@@ -373,6 +501,18 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/SessionResponseOptions'}
 
+    UpdateSessionRequest:
+      description: Fields to update on an existing session (all optional)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/UpdateSessionRequest'}
+
+    ReplayRequest:
+      description: Options for replaying a captured request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ReplayRequest'}
+
     CheckSessionExistsRequest:
       description: Check if a session exists by UUID
       content:
@@ -410,8 +550,34 @@ components:
               uuid: {$ref: '#/components/schemas/UUID'}
               response: {$ref: '#/components/schemas/SessionResponseOptions'}
               created_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+              slug: {type: string, example: my-session}
+              group: {type: string, example: team-a}
+              expires_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+              long_lived: {type: boolean, example: false}
             required: [uuid, response, created_at_unix_milli]
             additionalProperties: false
+
+    SessionsListResponse:
+      description: List of session summaries
+      content:
+        application/json:
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/SessionSummary'}
+
+    SearchResponse:
+      description: Search results
+      content:
+        application/json:
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/SearchResultItem'}
+
+    ReplayResponse:
+      description: Response received when replaying a captured request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ReplayResponse'}
 
     CheckSessionExistsResponse:
       description: A hashmap of session UUIDs and their existence

@@ -31,7 +31,7 @@ func New(db storage.Storage, sub pubsub.Subscriber[pubsub.RequestEvent]) *Handle
 }
 
 func (h *Handler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, sID sID) error {
-	if _, err := h.db.GetSession(ctx, sID.String()); err != nil {
+	if _, err := h.db.GetSession(ctx, sID); err != nil {
 		return fmt.Errorf("failed to get the session: %w", err)
 	}
 
@@ -50,9 +50,9 @@ func (h *Handler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Req
 	// uncomment to debug the ping/pong messages
 	// ws.SetPongHandler(func(appData string) error { fmt.Println(">>> pong", appData); return nil })
 
-	sub, unsubscribe, err := h.sub.Subscribe(ctx, sID.String())
+	sub, unsubscribe, err := h.sub.Subscribe(ctx, sID)
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to the captured requests for the session %s: %w", sID.String(), err)
+		return fmt.Errorf("failed to subscribe to the captured requests for the session %s: %w", sID, err)
 	}
 
 	defer unsubscribe()

@@ -25,13 +25,13 @@ func New(appCtx context.Context, db storage.Storage, pub pubsub.Publisher[pubsub
 
 func (h *Handler) Handle(ctx context.Context, sID sID, rID rID) (*openapi.SuccessfulOperationResponse, error) {
 	// get the request from the storage to notify the subscribers
-	req, getErr := h.db.GetRequest(ctx, sID.String(), rID.String())
+	req, getErr := h.db.GetRequest(ctx, sID, rID.String())
 	if getErr != nil {
 		return nil, getErr
 	}
 
 	// delete it
-	if err := h.db.DeleteRequest(ctx, sID.String(), rID.String()); err != nil {
+	if err := h.db.DeleteRequest(ctx, sID, rID.String()); err != nil {
 		return nil, err
 	}
 
@@ -42,7 +42,7 @@ func (h *Handler) Handle(ctx context.Context, sID sID, rID rID) (*openapi.Succes
 	}
 
 	// notify the subscribers
-	if err := h.pub.Publish(h.appCtx, sID.String(), pubsub.RequestEvent{ //nolint:contextcheck
+	if err := h.pub.Publish(h.appCtx, sID, pubsub.RequestEvent{ //nolint:contextcheck
 		Action: pubsub.RequestActionDelete,
 		Request: &pubsub.Request{
 			ID:                 rID.String(),

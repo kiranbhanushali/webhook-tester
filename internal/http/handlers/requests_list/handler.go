@@ -22,7 +22,7 @@ type (
 func New(db storage.Storage) *Handler { return &Handler{db: db} }
 
 func (h *Handler) Handle(ctx context.Context, sID sID) (*openapi.CapturedRequestsListResponse, error) {
-	rList, lErr := h.db.GetAllRequests(ctx, sID.String())
+	rList, lErr := h.db.GetAllRequests(ctx, sID)
 	if lErr != nil {
 		return nil, lErr
 	}
