@@ -811,6 +811,7 @@ func scanSession(sc rowScanner) (*Session, error) {
 		return nil, err
 	}
 
+	sess.ID = id // populate the output-only ID field (read from the id column)
 	sess.Code = code
 	sess.Headers = headers
 	sess.ResponseBody = body

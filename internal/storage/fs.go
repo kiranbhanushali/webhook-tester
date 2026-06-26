@@ -378,6 +378,8 @@ func (s *FS) GetSession(ctx context.Context, sID string) (*Session, error) {
 	// set the expiration time
 	session.ExpiresAt = *expiresAt
 
+	session.ID = sID // populate the output-only ID field
+
 	return &session, nil
 }
 

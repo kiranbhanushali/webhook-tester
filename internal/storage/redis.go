@@ -142,6 +142,8 @@ func (s *Redis) GetSession(ctx context.Context, sID string) (*Session, error) {
 
 	session.ExpiresAt = s.timeNow().Add(expire)
 
+	session.ID = sID // populate the output-only ID field
+
 	return &session, nil
 }
 

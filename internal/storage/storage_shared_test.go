@@ -75,6 +75,7 @@ func testSessionCreateReadDelete(
 		require.Equal(t, code, got.Code)
 		require.Equal(t, sessionHeaders, got.Headers)
 		require.Equal(t, delay, got.Delay)
+		require.Equal(t, sID, got.ID) // output-only ID is populated on read
 		assert.NotZero(t, got.CreatedAtUnixMilli)
 
 		// delete
@@ -529,7 +530,12 @@ func testExtendedSessionOps(
 		require.NotNil(t, got)
 		require.Equal(t, "my-slug", got.Slug)
 		require.Equal(t, uint16(201), got.Code)
-		_ = sID
+
+		// the output-only ID field must be populated and consistent across both read paths
+		bySID, err := impl.GetSession(ctx, sID)
+		require.NoError(t, err)
+		require.Equal(t, sID, got.ID, "GetSessionBySlug must populate Session.ID")
+		require.Equal(t, got.ID, bySID.ID, "GetSessionBySlug(slug).ID == GetSession(id).ID")
 
 		// empty slug must return ErrNotFound
 		_, err = impl.GetSessionBySlug(ctx, "")

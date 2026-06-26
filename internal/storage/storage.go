@@ -84,6 +84,10 @@ type Storage interface {
 type (
 	// Session describes session settings (like response data and any additional information).
 	Session struct {
+		// ID is the session's unique identifier (UUID). It is an output-only field:
+		// it is populated on reads (GetSession and GetSessionBySlug) and is ignored by
+		// NewSession, whose id comes from the variadic argument or a generated value.
+		ID                 string        `json:"-"`                     // session ID (populated on reads)
 		Code               uint16        `json:"code"`                  // default server response code
 		Headers            []HttpHeader  `json:"headers"`               // server response headers
 		ResponseBody       []byte        `json:"body"`                  // server response body (payload)

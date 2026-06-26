@@ -107,6 +107,7 @@ func TestSQLite_RoundTrip(t *testing.T) {
 	bySlug, err := s.GetSessionBySlug(ctx, "my-callback")
 	require.NoError(t, err)
 	require.Equal(t, "bob", bySlug.GroupName)
+	require.Equal(t, sID, bySlug.ID, "GetSessionBySlug must populate Session.ID")
 
 	// mutate via patch
 	newGroup := "acme"

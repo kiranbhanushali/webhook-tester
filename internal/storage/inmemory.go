@@ -196,16 +196,18 @@ func (s *InMemory) GetSession(ctx context.Context, sID string) (*Session, error)
 	}
 
 	data.Lock()
-	var expiresAt = data.session.ExpiresAt //nolint:wsl_v5
+	var sess = data.session //nolint:wsl_v5 // copy under lock (avoids aliasing the shared struct)
 	data.Unlock()
 
-	if expiresAt.Before(s.timeNow()) {
+	if sess.ExpiresAt.Before(s.timeNow()) {
 		s.sessions.Delete(sID)
 
 		return nil, ErrSessionNotFound // session has been expired
 	}
 
-	return &data.session, nil
+	sess.ID = sID // populate the output-only ID field
+
+	return &sess, nil
 }
 
 func (s *InMemory) AddSessionTTL(ctx context.Context, sID string, howMuch time.Duration) error {
