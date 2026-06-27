@@ -6,6 +6,7 @@ export {
   type SessionPatch,
   type SearchMatch,
   type FirehoseEvent,
+  type CapturedRequestsPage,
 } from './client'
 export {
   type APIError,

@@ -122,6 +122,8 @@ export type SessionPatch = Readonly<{
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS' | 'CONNECT' | 'TRACE' | string
 
 type CapturedRequest = Readonly<{
+  /** Durable, strictly-increasing, never-reused capture sequence (the pagination cursor). */
+  seq: number
   uuid: string
   clientAddress: string
   method: HttpMethod
@@ -130,6 +132,15 @@ type CapturedRequest = Readonly<{
   url: Readonly<URL>
   capturedAt: Readonly<Date>
   authorized: boolean
+}>
+
+/** A page of captured requests (newest first) with a cursor for the next (older) page. */
+export type CapturedRequestsPage = Readonly<{
+  items: ReadonlyArray<CapturedRequest>
+  /** Pass as `before` to fetch the next (older) page; the seq of the oldest item returned. */
+  nextBefore: number
+  /** True when more (older) requests remain to be loaded. */
+  hasMore: boolean
 }>
 
 type RequestEvent = Readonly<{
@@ -727,34 +738,50 @@ export class Client {
   }
 
   /**
-   * Returns the list of captured requests for the session by its ID.
+   * Returns a page of captured requests for the session by its ID, NEWEST first.
+   *
+   * Omit `before` (or pass 0) to fetch the newest page; then pass the returned `nextBefore` as
+   * `before` on each subsequent call to fetch the next (older) page. `hasMore` is true while older
+   * requests remain. This is cursor-paginated so a session with tens of thousands of captures stays
+   * fast (the previous behavior returned ALL requests and timed out on large sessions).
    *
    * @throws {APIError}
    */
-  async getSessionRequests(sID: string): Promise<ReadonlyArray<CapturedRequest>> {
+  async getSessionRequests(
+    sID: string,
+    opts?: { before?: number; limit?: number }
+  ): Promise<CapturedRequestsPage> {
     const { data, response } = await this.api.GET('/api/session/{session_uuid}/requests', {
-      params: { path: { session_uuid: sID } },
+      params: {
+        path: { session_uuid: sID },
+        query: { before: opts?.before ?? 0, limit: opts?.limit ?? 50 },
+      },
     })
 
     if (data) {
-      return Object.freeze(
-        Array.from(data)
-          // convert the list of requests to the immutable objects with the correct types
-          .map((req) =>
-            Object.freeze({
-              uuid: req.uuid,
-              clientAddress: req.client_address,
-              method: req.method,
-              requestPayload: base64ToUint8Array(req.request_payload_base64),
-              headers: Object.freeze(Array.from(req.headers).map(({ name, value }) => Object.freeze({ name, value }))),
-              url: Object.freeze(new URL(req.url)),
-              capturedAt: Object.freeze(new Date(req.captured_at_unix_milli)),
-              authorized: req.authorized,
-            })
-          )
-          // sort the list by capturedAt date, to have the latest requests first
-          .sort((a, b) => b.capturedAt.getTime() - a.capturedAt.getTime())
-      )
+      return Object.freeze({
+        items: Object.freeze(
+          Array.from(data.items)
+            // convert the list of requests to the immutable objects with the correct types
+            .map((req) =>
+              Object.freeze({
+                seq: req.seq,
+                uuid: req.uuid,
+                clientAddress: req.client_address,
+                method: req.method,
+                requestPayload: base64ToUint8Array(req.request_payload_base64),
+                headers: Object.freeze(Array.from(req.headers).map(({ name, value }) => Object.freeze({ name, value }))),
+                url: Object.freeze(new URL(req.url)),
+                capturedAt: Object.freeze(new Date(req.captured_at_unix_milli)),
+                authorized: req.authorized,
+              })
+            )
+            // sort the page by capturedAt date, to have the latest requests first
+            .sort((a, b) => b.capturedAt.getTime() - a.capturedAt.getTime())
+        ),
+        nextBefore: data.next_before,
+        hasMore: data.has_more,
+      })
     }
 
     throw new APIErrorUnknown({ message: response.statusText, response })
@@ -958,6 +985,7 @@ export class Client {
 
     if (data) {
       return Object.freeze({
+        seq: data.seq,
         uuid: data.uuid,
         clientAddress: data.client_address,
         method: data.method,

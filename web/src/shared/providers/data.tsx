@@ -114,6 +114,16 @@ type DataContext = {
   readonly requests: ReadonlyArray<Request>
 
   /**
+   * Load the next (older) page of requests for the current session and APPEND it (de-duped by request id).
+   * The server cursor is the source of truth for paging; new live requests keep arriving via the WebSocket
+   * and are prepended at the top. No-op when there is nothing more to load or a load is already in flight.
+   */
+  loadMoreRequests(): Promise<void>
+
+  /** True while older requests remain to be loaded for the current session (drives the infinite-scroll sentinel). */
+  readonly hasMoreRequests: boolean
+
+  /**
    * Switch to a request with the given session and request ID.
    *
    * NOTE: The first promise resolves when the request is loaded from the database (FAST), and the second one
@@ -191,6 +201,8 @@ const dataContext = createContext<DataContext>({
   destroySession: () => notInitialized(),
   request: null,
   requests: [],
+  loadMoreRequests: () => notInitialized(),
+  hasMoreRequests: false,
   switchToRequest: () => notInitialized(),
   removeRequest: () => notInitialized(),
   removeAllRequests: () => notInitialized(),
@@ -205,6 +217,9 @@ const dataContext = createContext<DataContext>({
 
 /** Sort requests by the captured time (from newest to oldest) */
 const requestsSorter = <T extends { capturedAt: Date }>(a: T, b: T) => b.capturedAt.getTime() - a.capturedAt.getTime()
+
+/** Page size for the cursor-paginated, infinite-scroll requests list (newest first). */
+const REQUESTS_PAGE_SIZE = 50
 
 /** Build the immutable in-memory session state from a stored (database) session, coalescing the optional new fields. */
 const dbSessionToState = (s: DbSession): Readonly<Session> =>
@@ -260,7 +275,17 @@ export const DataProvider: React.FC<{
   const [allSessionIDs, setAllSessionIDs] = useState<ReadonlyArray<string>>([])
   const [request, setRequest] = useState<Readonly<Request> | null>(null)
   const [requests, setRequests] = useState<ReadonlyArray<Request>>([])
+  const [hasMoreRequests, setHasMoreRequests] = useState<boolean>(false)
   const [webHookUrl, setWebHookUrl] = useState<URL | null>(null)
+
+  // server-cursor state for the paginated requests list (source of truth for "load older").
+  const pageCursorRef = useRef<{ sID: string | null; before: number; hasMore: boolean }>({
+    sID: null,
+    before: 0,
+    hasMore: false,
+  })
+  // guards loadMoreRequests against overlapping in-flight fetches (e.g. rapid scrolling).
+  const loadingMoreRef = useRef<boolean>(false)
 
   // the subscription closer function (if not null, it means the subscription is active)
   const closeSubRef = useRef<(() => void) | null>(null)
@@ -303,20 +328,25 @@ export const DataProvider: React.FC<{
                     authorized: req.authorized,
                   })
 
-                  // append the new request in front of the list (update the state)
-                  setRequests((prev) => [
-                    Object.freeze({
-                      ...payloadGetter(db, req.uuid),
-                      rID: req.uuid,
-                      clientAddress: req.clientAddress,
-                      method: req.method,
-                      headers: [...req.headers],
-                      url: req.url,
-                      capturedAt: req.capturedAt,
-                      authorized: req.authorized,
-                    }),
-                    ...prev,
-                  ])
+                  // prepend the new request at the top (newest first), de-duped by request id so a
+                  // request already present in the loaded page is not duplicated by a live event
+                  setRequests((prev) =>
+                    prev.some((r) => r.rID === req.uuid)
+                      ? prev
+                      : [
+                          Object.freeze({
+                            ...payloadGetter(db, req.uuid),
+                            rID: req.uuid,
+                            clientAddress: req.clientAddress,
+                            method: req.method,
+                            headers: [...req.headers],
+                            url: req.url,
+                            capturedAt: req.capturedAt,
+                            authorized: req.authorized,
+                          }),
+                          ...prev,
+                        ]
+                  )
 
                   // invoke the listener callback
                   listeners?.onNewRequest?.(
@@ -364,8 +394,10 @@ export const DataProvider: React.FC<{
 
               // all requests were cleared
               case RequestEventAction.clear: {
-                // clear the requests list
+                // clear the requests list and reset the paging cursor
                 setRequests(Object.freeze([]))
+                pageCursorRef.current = { sID, before: 0, hasMore: false }
+                setHasMoreRequests(false)
 
                 // invoke the listener callback
                 listeners?.onRequestsClear?.()
@@ -471,21 +503,28 @@ export const DataProvider: React.FC<{
   )
 
   /**
-   * Load the requests for the session with the given ID.
+   * Load the FIRST (newest) page of requests for the session with the given ID, cursor-paginated.
    *
-   * This action will reset the requests list and update it with the new data.
+   * This resets the requests list and the paging cursor. Older pages are loaded on demand via
+   * loadMoreRequests (infinite scroll); the server cursor is the source of truth for paging. The
+   * Dexie cache is used only for an instant first paint and lazy payloads — it is intentionally NOT
+   * reconciled against the whole server history here (we only ever fetch one page at a time).
    *
-   * NOTE: The first promise resolves when the requests are loaded from the database (FAST), and the second one
-   * resolves when the requests are loaded from the server (SLOW).
+   * NOTE: The first promise resolves when the newest cached page is shown from the database (FAST),
+   * and the second one resolves when the newest page is loaded from the server (SLOW).
    */
   const loadRequests = useCallback(
     async (sID: string): Promise<() => Promise<void>> => {
-      // load requests for the session from the database (fast)
+      // reset the cursor for the session we are switching to
+      pageCursorRef.current = { sID, before: 0, hasMore: false }
+      setHasMoreRequests(false)
+
+      // show the newest cached page from the database (fast)
       const dbList = await db.getSessionRequests(sID)
 
-      // update the requests list (first state update, to show the data from the database)
       setRequests(
         dbList
+          .slice(0, REQUESTS_PAGE_SIZE)
           .map((r) =>
             Object.freeze({
               ...payloadGetter(db, r.rID),
@@ -501,13 +540,13 @@ export const DataProvider: React.FC<{
           .sort(requestsSorter)
       )
 
-      // return a function that loads requests from the server (slow)
+      // return a function that loads the newest page from the server (slow, authoritative)
       return async () => {
-        const reqs = await api.getSessionRequests(sID)
+        const page = await api.getSessionRequests(sID, { limit: REQUESTS_PAGE_SIZE })
 
-        // update the requests list (second state update, to show the fresh data)
+        // update the requests list (second state update, to show the fresh newest page)
         setRequests(
-          reqs
+          page.items
             .map((r) =>
               Object.freeze({
                 ...payloadGetter(db, r.uuid),
@@ -523,9 +562,13 @@ export const DataProvider: React.FC<{
             .sort(requestsSorter)
         )
 
-        // update the requests in the database (for future use)
+        // record the server cursor for subsequent "load older" requests
+        pageCursorRef.current = { sID, before: page.nextBefore, hasMore: page.hasMore }
+        setHasMoreRequests(page.hasMore)
+
+        // cache the page in the database (for future use / lazy payloads)
         await db.putRequest(
-          ...reqs.map((r) => ({
+          ...page.items.map((r) => ({
             sID: sID,
             rID: r.uuid,
             method: r.method,
@@ -537,17 +580,73 @@ export const DataProvider: React.FC<{
             authorized: r.authorized,
           }))
         )
-
-        // find requests that are not present in the server response but are in the database
-        const toRemove = dbList.filter((r) => !reqs.find((req) => req.uuid === r.rID)).map((r) => r.rID)
-
-        if (toRemove.length) {
-          await db.deleteRequest(...toRemove)
-        }
       }
     },
     [db, api]
   )
+
+  /**
+   * Load the next (older) page of requests for the current session and APPEND it (de-duped by id).
+   *
+   * Uses the server cursor (before = the seq of the oldest loaded request) recorded by loadRequests
+   * / previous loadMoreRequests calls. No-op when there is nothing more to load or a load is already
+   * in flight. Live requests continue to arrive via the WebSocket and are prepended at the top.
+   */
+  const loadMoreRequests = useCallback(async (): Promise<void> => {
+    const cur = pageCursorRef.current
+
+    if (!cur.sID || !cur.hasMore || loadingMoreRef.current) {
+      return
+    }
+
+    loadingMoreRef.current = true
+
+    try {
+      const page = await api.getSessionRequests(cur.sID, { before: cur.before, limit: REQUESTS_PAGE_SIZE })
+
+      // append the older page, skipping any ids already present (e.g. a live request)
+      setRequests((prev) => {
+        const known = new Set(prev.map((r) => r.rID))
+        const older = page.items
+          .filter((r) => !known.has(r.uuid))
+          .map((r) =>
+            Object.freeze({
+              ...payloadGetter(db, r.uuid),
+              rID: r.uuid,
+              clientAddress: r.clientAddress,
+              method: r.method,
+              headers: [...r.headers],
+              url: r.url,
+              capturedAt: r.capturedAt,
+              authorized: r.authorized,
+            })
+          )
+
+        return [...prev, ...older].sort(requestsSorter)
+      })
+
+      // advance the cursor
+      pageCursorRef.current = { sID: cur.sID, before: page.nextBefore, hasMore: page.hasMore }
+      setHasMoreRequests(page.hasMore)
+
+      // cache the page in the database (for future use / lazy payloads)
+      await db.putRequest(
+        ...page.items.map((r) => ({
+          sID: cur.sID as string,
+          rID: r.uuid,
+          method: r.method,
+          clientAddress: r.clientAddress,
+          url: r.url.toString(),
+          capturedAt: r.capturedAt,
+          headers: [...r.headers],
+          payload: r.requestPayload,
+          authorized: r.authorized,
+        }))
+      )
+    } finally {
+      loadingMoreRef.current = false
+    }
+  }, [api, db])
 
   /**
    * Switch to a session with the given ID.
@@ -835,8 +934,10 @@ export const DataProvider: React.FC<{
       // remove all requests from the database
       await db.deleteAllRequests(sID)
 
-      // clear the requests list (update the state)
+      // clear the requests list and reset the paging cursor (update the state)
       setRequests(Object.freeze([]))
+      pageCursorRef.current = { sID, before: 0, hasMore: false }
+      setHasMoreRequests(false)
 
       // skip the slow operation if we don't need to remove the request from the server
       if (!andFromServer) {
@@ -980,6 +1081,8 @@ export const DataProvider: React.FC<{
         destroySession,
         request,
         requests,
+        loadMoreRequests,
+        hasMoreRequests,
         switchToRequest,
         removeRequest,
         removeAllRequests,

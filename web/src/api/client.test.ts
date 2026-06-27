@@ -398,41 +398,57 @@ describe('newSession — inbound-auth fields', () => {
   })
 })
 
-describe('getSessionRequests — authorized field', () => {
-  test('maps authorized:true', async () => {
-    fetchMock.getOnce(/\/api\/session\/s1\/requests$/, {
-      status: 200,
-      body: [{
-        uuid: 'r1',
-        client_address: '1.2.3.4',
-        method: 'POST',
-        request_payload_base64: '',
-        headers: [],
-        url: 'http://localhost/s1',
-        captured_at_unix_milli: 0,
-        authorized: true,
-      }],
-    })
-    const reqs = await new Client({ baseUrl }).getSessionRequests('s1')
-    expect(reqs[0].authorized).toBe(true)
+describe('getSessionRequests — paginated (newest first)', () => {
+  const page = (items: unknown[], next_before: number, has_more: boolean) => ({ items, next_before, has_more })
+  const item = (uuid: string, authorized: boolean, seq: number) => ({
+    seq,
+    uuid,
+    client_address: '1.2.3.4',
+    method: 'POST',
+    request_payload_base64: '',
+    headers: [],
+    url: 'http://localhost/' + uuid,
+    captured_at_unix_milli: seq, // monotonic so newest-first sort is deterministic
+    authorized,
   })
 
-  test('maps authorized:false', async () => {
-    fetchMock.getOnce(/\/api\/session\/s2\/requests$/, {
+  test('first page: defaults to before=0&limit=50 and parses items/cursor/has_more', async () => {
+    fetchMock.getOnce(/\/api\/session\/s1\/requests/, {
       status: 200,
-      body: [{
-        uuid: 'r2',
-        client_address: '1.2.3.4',
-        method: 'POST',
-        request_payload_base64: '',
-        headers: [],
-        url: 'http://localhost/s2',
-        captured_at_unix_milli: 0,
-        authorized: false,
-      }],
+      body: page([item('r2', true, 2), item('r1', true, 1)], 1, true),
     })
-    const reqs = await new Client({ baseUrl }).getSessionRequests('s2')
-    expect(reqs[0].authorized).toBe(false)
+
+    const res = await new Client({ baseUrl }).getSessionRequests('s1')
+
+    // default cursor params are sent
+    const url = new URL(String(fetchMock.callHistory.lastCall()?.url))
+    expect(url.searchParams.get('before')).toBe('0')
+    expect(url.searchParams.get('limit')).toBe('50')
+
+    // page shape parsed, newest first
+    expect(res.items).toHaveLength(2)
+    expect(res.items[0].uuid).toBe('r2')
+    expect(res.items[0].seq).toBe(2)
+    expect(res.items[0].authorized).toBe(true)
+    expect(res.nextBefore).toBe(1)
+    expect(res.hasMore).toBe(true)
+  })
+
+  test('next page: forwards the before cursor and limit, parses has_more=false', async () => {
+    fetchMock.getOnce(/\/api\/session\/s2\/requests/, {
+      status: 200,
+      body: page([item('r0', false, 0)], 0, false),
+    })
+
+    const res = await new Client({ baseUrl }).getSessionRequests('s2', { before: 1, limit: 50 })
+
+    const url = new URL(String(fetchMock.callHistory.lastCall()?.url))
+    expect(url.searchParams.get('before')).toBe('1')
+    expect(url.searchParams.get('limit')).toBe('50')
+    expect(res.items).toHaveLength(1)
+    expect(res.items[0].authorized).toBe(false)
+    expect(res.hasMore).toBe(false)
+    expect(res.nextBefore).toBe(0)
   })
 })
 

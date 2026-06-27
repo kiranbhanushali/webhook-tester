@@ -1,4 +1,4 @@
-import React, { useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Center, Image, Loader, Stack, Text } from '@mantine/core'
 import { IconTrash } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
@@ -9,8 +9,42 @@ import { useData } from '~/shared'
 
 export const SideBar = (): React.JSX.Element => {
   const navigate = useNavigate()
-  const { session, request, requests, removeAllRequests } = useData()
+  const { session, request, requests, removeAllRequests, loadMoreRequests, hasMoreRequests } = useData()
   const activeRequestRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const [loadingMore, setLoadingMore] = useState<boolean>(false)
+
+  // fetch the next (older) page when the user scrolls the sentinel into view (infinite scroll)
+  const onSentinelVisible = useCallback(() => {
+    if (loadingMore) {
+      return
+    }
+
+    setLoadingMore(true)
+    loadMoreRequests().finally(() => setLoadingMore(false))
+  }, [loadingMore, loadMoreRequests])
+
+  useEffect(() => {
+    const el = sentinelRef.current
+
+    if (!el || !hasMoreRequests || typeof IntersectionObserver === 'undefined') {
+      return
+    }
+
+    // rootMargin pre-loads the next page slightly before the sentinel is fully on screen
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          onSentinelVisible()
+        }
+      },
+      { rootMargin: '200px' }
+    )
+
+    observer.observe(el)
+
+    return () => observer.disconnect()
+  }, [hasMoreRequests, onSentinelVisible, requests.length])
 
   return (
     <Stack align="stretch" justify="flex-start" gap="xs">
@@ -32,6 +66,15 @@ export const SideBar = (): React.JSX.Element => {
                 />
               )
             })}
+
+            {hasMoreRequests && (
+              <Center ref={sentinelRef} py="xs" data-testid="requests-load-more">
+                <Loader color="dimmed" size="xs" mr={8} />
+                <Text c="dimmed" size="xs">
+                  Loading older requests…
+                </Text>
+              </Center>
+            )}
 
             {requests.length > 1 && (
               <Center>
