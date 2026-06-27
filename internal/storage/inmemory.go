@@ -436,6 +436,65 @@ func (s *InMemory) ListRequestsPage(ctx context.Context, sID string, beforeSeq i
 	return out, nil
 }
 
+// ListRecentRequests returns the most-recent requests across all non-expired sessions (optionally
+// filtered to one session and/or group), sorted by Seq descending (newest first), capped at limit.
+// This driver is non-indexed: it iterates every session's requests and sorts in memory.
+func (s *InMemory) ListRecentRequests(
+	ctx context.Context, f RecentRequestsFilter, beforeSeq int64, limit int,
+) ([]RecentRequest, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var (
+		now = s.timeNow()
+		out []RecentRequest
+	)
+
+	s.sessions.Range(func(sID string, data *sessionData) bool {
+		data.Lock()
+		sess := data.session
+		expiresAt := sess.ExpiresAt
+		data.Unlock()
+
+		if !sess.LongLived && expiresAt.Before(now) {
+			return true // skip expired
+		}
+
+		if f.Session != "" && sID != f.Session {
+			return true
+		}
+
+		if f.Group != "" && sess.GroupName != f.Group {
+			return true
+		}
+
+		data.requests.Range(func(_ string, req Request) bool {
+			if beforeSeq > 0 && req.Seq >= beforeSeq {
+				return true
+			}
+
+			out = append(out, RecentRequest{Request: req, SessionID: sID, SessionSlug: sess.Slug})
+
+			return true
+		})
+
+		return true
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq > out[j].Seq }) // newest first
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
 func (s *InMemory) DeleteRequest(ctx context.Context, sID, rID string) error {
 	if err := s.isOpenAndNotDone(ctx); err != nil {
 		return err

@@ -757,6 +757,84 @@ func (s *FS) ListRequestsPage(ctx context.Context, sID string, beforeSeq int64, 
 	return out, nil
 }
 
+// ListRecentRequests returns the most-recent requests across all non-expired sessions (optionally
+// filtered to one session and/or group), sorted by Seq descending (newest first), capped at limit.
+// This driver is non-indexed: it iterates every session directory and sorts in memory. Like
+// ListRequestsPage, the fs seq counter is in-process and resets on restart — use SQLite otherwise.
+func (s *FS) ListRecentRequests(
+	ctx context.Context, f RecentRequestsFilter, beforeSeq int64, limit int,
+) ([]RecentRequest, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var dirs []os.DirEntry
+
+	if err := s.withLock(true, func() (err error) { dirs, err = os.ReadDir(s.root); return }); err != nil {
+		return nil, err
+	}
+
+	var (
+		now = s.timeNow()
+		out []RecentRequest
+	)
+
+	for _, dir := range dirs {
+		if !dir.IsDir() || len(dir.Name()) != 36 { //nolint:mnd // UUID length
+			continue
+		}
+
+		sID := dir.Name()
+
+		if f.Session != "" && sID != f.Session {
+			continue
+		}
+
+		sess, err := s.GetSession(ctx, sID)
+		if err != nil || (!sess.LongLived && sess.ExpiresAt.Before(now)) {
+			continue
+		}
+
+		if f.Group != "" && sess.GroupName != f.Group {
+			continue
+		}
+
+		all, err := s.GetAllRequests(ctx, sID)
+		if err != nil {
+			continue
+		}
+
+		for _, req := range all {
+			if beforeSeq > 0 && req.Seq >= beforeSeq {
+				continue
+			}
+
+			out = append(out, RecentRequest{Request: req, SessionID: sID, SessionSlug: sess.Slug})
+		}
+	}
+
+	slices.SortFunc(out, func(a, b RecentRequest) int {
+		switch {
+		case a.Seq > b.Seq: // newest first
+			return -1
+		case a.Seq < b.Seq:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
 func (s *FS) DeleteRequest(ctx context.Context, sID, rID string) error {
 	if err := s.isOpenAndNotDone(ctx); err != nil {
 		return err

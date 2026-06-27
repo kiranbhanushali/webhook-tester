@@ -383,6 +383,157 @@ func TestRedis_ListRequestsPage_Unsupported(t *testing.T) {
 	require.ErrorIs(t, err, storage.ErrSearchUnsupported)
 }
 
+// testListRecentRequests exercises the cross-session, NEWEST-first recent-events contract
+// (ListRecentRequests): global seq ordering, the before cursor, limit, and the session/group
+// filters. It runs for every driver that supports a monotonic sequence (sqlite, inmemory, fs).
+func testListRecentRequests(
+	t *testing.T,
+	newImpl func(sessionTTL time.Duration, maxRequests uint32) storage.Storage,
+	sleep func(time.Duration),
+) {
+	t.Helper()
+
+	var ctx = context.Background()
+
+	t.Run("global newest-first, cursor, limit, session+group filters", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 100)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		sA, err := impl.NewSession(ctx, storage.Session{Slug: "alpha", GroupName: "g1"})
+		require.NoError(t, err)
+
+		sB, err := impl.NewSession(ctx, storage.Session{Slug: "beta", GroupName: "g2"})
+		require.NoError(t, err)
+
+		// Interleave captures across the two sessions so the GLOBAL seq order alternates A,B,A,B...
+		const perSession = 3
+		for i := range perSession {
+			_, e := impl.NewRequest(ctx, sA, storage.Request{Method: "POST", Body: []byte{byte('a' + i)}})
+			require.NoError(t, e)
+			sleep(time.Millisecond)
+
+			_, e = impl.NewRequest(ctx, sB, storage.Request{Method: "GET", Body: []byte{byte('A' + i)}})
+			require.NoError(t, e)
+			sleep(time.Millisecond)
+		}
+
+		// Unfiltered: newest-first across BOTH sessions, strictly descending seq, ID+session populated.
+		all, err := impl.ListRecentRequests(ctx, storage.RecentRequestsFilter{}, 0, 100)
+		require.NoError(t, err)
+		require.Len(t, all, perSession*2)
+		require.Equal(t, []byte{'C'}, all[0].Body) // the last capture was session B's 'C'
+		require.Equal(t, "beta", all[0].SessionSlug)
+		require.Equal(t, sB, all[0].SessionID)
+		require.NotEmpty(t, all[0].ID, "request ID must be populated on read")
+
+		for i := 1; i < len(all); i++ {
+			require.Less(t, all[i].Seq, all[i-1].Seq, "strictly descending global seq")
+		}
+
+		// before cursor pages backwards with no skips/dupes.
+		page1, err := impl.ListRecentRequests(ctx, storage.RecentRequestsFilter{}, 0, 2)
+		require.NoError(t, err)
+		require.Len(t, page1, 2)
+
+		page2, err := impl.ListRecentRequests(ctx, storage.RecentRequestsFilter{}, page1[1].Seq, 2)
+		require.NoError(t, err)
+		require.Len(t, page2, 2)
+		require.Less(t, page2[0].Seq, page1[1].Seq)
+
+		// limit is respected.
+		one, err := impl.ListRecentRequests(ctx, storage.RecentRequestsFilter{}, 0, 1)
+		require.NoError(t, err)
+		require.Len(t, one, 1)
+		require.Equal(t, []byte{'C'}, one[0].Body)
+
+		// session filter (by canonical ID): only session A's requests.
+		onlyA, err := impl.ListRecentRequests(ctx, storage.RecentRequestsFilter{Session: sA}, 0, 100)
+		require.NoError(t, err)
+		require.Len(t, onlyA, perSession)
+		for _, r := range onlyA {
+			require.Equal(t, sA, r.SessionID)
+			require.Equal(t, "alpha", r.SessionSlug)
+		}
+
+		// group filter: only session B (group g2).
+		onlyG2, err := impl.ListRecentRequests(ctx, storage.RecentRequestsFilter{Group: "g2"}, 0, 100)
+		require.NoError(t, err)
+		require.Len(t, onlyG2, perSession)
+		for _, r := range onlyG2 {
+			require.Equal(t, "beta", r.SessionSlug)
+		}
+	})
+
+	t.Run("empty store returns no rows", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 100)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		out, err := impl.ListRecentRequests(ctx, storage.RecentRequestsFilter{}, 0, 10)
+		require.NoError(t, err)
+		require.Empty(t, out)
+	})
+}
+
+func TestInMemory_ListRecentRequests(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testListRecentRequests(t,
+		func(sTTL time.Duration, maxReq uint32) storage.Storage {
+			return storage.NewInMemory(sTTL, maxReq, storage.WithInMemoryTimeNow(ft.Get))
+		},
+		func(d time.Duration) { ft.Add(d) },
+	)
+}
+
+func TestFS_ListRecentRequests(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testListRecentRequests(t,
+		func(sTTL time.Duration, maxReq uint32) storage.Storage {
+			return storage.NewFS(t.TempDir(), sTTL, maxReq, storage.WithFSTimeNow(ft.Get))
+		},
+		func(d time.Duration) { ft.Add(d) },
+	)
+}
+
+func TestSQLite_ListRecentRequests(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testListRecentRequests(t,
+		func(sTTL time.Duration, maxReq uint32) storage.Storage {
+			dsn := "file:" + filepath.Join(t.TempDir(), "recent.db")
+
+			impl, err := storage.NewSQLite(context.Background(), dsn, sTTL, maxReq, storage.WithSQLiteTimeNow(ft.Get))
+			require.NoError(t, err)
+
+			return impl
+		},
+		func(d time.Duration) { ft.Add(d) },
+	)
+}
+
+// TestRedis_ListRecentRequests_Unsupported documents that the Redis driver has no durable global
+// sequence and reports ListRecentRequests as unsupported (consistent with ListRequestsPage).
+func TestRedis_ListRecentRequests_Unsupported(t *testing.T) {
+	t.Parallel()
+
+	// nil client is fine: the method must short-circuit before touching it.
+	s := storage.NewRedis(nil, time.Minute, 100)
+
+	_, err := s.ListRecentRequests(context.Background(), storage.RecentRequestsFilter{}, 0, 10)
+	require.ErrorIs(t, err, storage.ErrSearchUnsupported)
+}
+
 // TestSQLite_RequestSeq_DurableAcrossReopen proves the durable counter survives a full
 // process restart (close + reopen of the same database file): a consumer's stored cursor
 // never silently rewinds.

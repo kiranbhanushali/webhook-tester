@@ -98,6 +98,18 @@ type Storage interface {
 	// cursor-paginated requests-list API. If the session is not found, ErrSessionNotFound is
 	// returned. Drivers without a durable monotonic sequence (Redis) return ErrSearchUnsupported.
 	ListRequestsPage(_ context.Context, sID string, beforeSeq int64, limit int) ([]Request, error)
+
+	// ListRecentRequests returns the most-recently captured requests across ALL sessions (or a
+	// single session / group when RecentRequestsFilter is set), ordered by the global, durable
+	// capture sequence (Seq) DESCENDING (NEWEST first), capped at limit (a non-positive limit
+	// applies defaultListLimit). When beforeSeq is non-positive the newest page is returned (no
+	// upper bound); otherwise only requests with Seq strictly less than beforeSeq are returned, so
+	// callers can page backwards through global history with no skips/duplicates (use the Seq of the
+	// last/oldest returned item as the next beforeSeq). Each item carries its originating session's
+	// ID and slug. Only non-expired sessions are considered. It backs the unified dashboard event
+	// viewer (recent backfill + filtered viewing). Drivers without a durable monotonic sequence
+	// (Redis) return ErrSearchUnsupported.
+	ListRecentRequests(_ context.Context, f RecentRequestsFilter, beforeSeq int64, limit int) ([]RecentRequest, error)
 }
 
 // defaultListLimit caps ListRequestsAfter results when the caller passes a non-positive limit.
@@ -228,6 +240,24 @@ type (
 		Key                 string
 		Value               string
 		CapturedAtUnixMilli int64
+	}
+
+	// RecentRequestsFilter restricts which captured requests ListRecentRequests returns.
+	// An empty filter returns the global recent feed across every (non-expired) session.
+	RecentRequestsFilter struct {
+		// Session restricts the feed to a single session by its canonical ID (empty = all
+		// sessions). Callers resolve a UUID-or-slug reference to an ID before filtering.
+		Session string
+		// Group restricts the feed to sessions whose GroupName matches exactly (empty = all groups).
+		Group string
+	}
+
+	// RecentRequest is a single row returned by ListRecentRequests: a captured Request joined to
+	// its originating session (ID + slug). The embedded Request carries the output-only ID and Seq.
+	RecentRequest struct {
+		Request
+		SessionID   string
+		SessionSlug string
 	}
 
 	// IdentifierRef is a single captured identifier joined to its session and request.

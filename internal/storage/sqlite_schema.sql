@@ -52,9 +52,10 @@ CREATE TABLE IF NOT EXISTS requests (
 
 CREATE INDEX IF NOT EXISTS idx_requests_session_time ON requests(session_id, created_at_ms DESC);
 
--- NOTE: idx_requests_session_seq is created by the Go migration (migrateRequestSeq), not here,
--- because on a pre-existing database the requests table may not yet have the seq column when
--- this batch runs (CREATE TABLE IF NOT EXISTS is a no-op for an existing table).
+-- NOTE: idx_requests_session_seq (per-session paging) and idx_requests_seq (global cross-session
+-- recent-events feed) are created by the Go migration (migrateRequestSeq), not here, because on a
+-- pre-existing database the requests table may not yet have the seq column when this batch runs
+-- (CREATE TABLE IF NOT EXISTS is a no-op for an existing table).
 
 -- Durable, never-reused monotonic counters. The 'request_seq' row backs Request.Seq: it is
 -- bumped inside NewRequest's transaction and read back, so the sequence survives max-requests

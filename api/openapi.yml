@@ -311,6 +311,54 @@ paths:
         '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
         '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
 
+  /api/events:
+    get:
+      summary: Get a page of recently captured requests across ALL sessions (newest first, cursor-paginated)
+      description: >
+        Returns the most-recently captured requests across ALL sessions NEWEST first, cursor-paginated
+        by the global, durable capture sequence (seq). Omit `before` (or pass 0) to fetch the newest
+        page; then pass the returned `next_before` as `before` on each subsequent request to fetch the
+        next (older) page (no skips, no duplicates). `has_more` is true while older requests remain.
+        Optionally narrow the feed to a single `session` (UUID or slug) and/or a `group` (exact session
+        group name). Each item carries its originating session (slug + uuid) so the unified dashboard
+        viewer can render a cross-session row and backfill recent history on load.
+      tags: [api]
+      operationId: apiEvents
+      parameters:
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            x-go-type: int64
+            minimum: 0
+            description: 'Return events with seq less than this cursor; 0 (default) = newest page'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            x-go-type: int
+            minimum: 1
+            maximum: 200
+            description: 'Maximum number of events to return (default: 50, max: 200)'
+        - name: session
+          in: query
+          required: false
+          schema:
+            type: string
+            description: 'Filter to a single session by UUID or slug (empty = all sessions)'
+        - name: group
+          in: query
+          required: false
+          schema:
+            type: string
+            description: 'Filter to sessions in this group, exact match (empty = all groups)'
+      responses:
+        '200': {$ref: '#/components/responses/RecentEventsResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Session filter not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
   /api/version:
     get:
       summary: Get app version
@@ -601,6 +649,48 @@ components:
       required: [events, next_cursor, has_more]
       additionalProperties: false
 
+    RecentEventItem:
+      type: object
+      description: A captured request (event) joined to its originating session, for the cross-session recent feed
+      properties:
+        seq:
+          type: integer
+          x-go-type: int64
+          example: 42
+          description: Durable, strictly-increasing, never-reused global capture sequence (use as the cursor)
+        uuid: {$ref: '#/components/schemas/UUID'}
+        session_uuid: {$ref: '#/components/schemas/UUID'}
+        session_slug: {type: string, example: 'my-app', description: 'Human-readable slug of the session that captured the request'}
+        client_address: {type: string, format: IPv4, example: '214.184.32.7'}
+        method: {$ref: '#/components/schemas/HttpMethod'}
+        request_payload_base64: {$ref: '#/components/schemas/Base64Encoded'}
+        headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        url:
+          description: The URL's hostname, schema, and port may differ from those on the frontend due to proxying
+          type: string
+          example: 'https://example.com/path?query=string'
+        captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+        authorized: {type: boolean, example: true, description: 'False when the request was rejected by inbound auth (it is still captured)'}
+      required: [seq, uuid, session_uuid, session_slug, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli, authorized]
+      additionalProperties: false
+
+    RecentEventsPage:
+      type: object
+      description: A page of recent captured requests across sessions (newest first) with a cursor for the next (older) page
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/RecentEventItem'}}
+        next_before:
+          type: integer
+          x-go-type: int64
+          example: 42
+          description: Pass as `before` to fetch the next (older) page; the seq of the oldest item returned (echoes the request's `before` when empty)
+        has_more:
+          type: boolean
+          example: true
+          description: True when the page was full (limit reached), so older events may remain
+      required: [items, next_before, has_more]
+      additionalProperties: false
+
     RequestEvent:
       type: object
       properties:
@@ -824,6 +914,12 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/EventsResponse'}
+
+    RecentEventsResponse:
+      description: A page of recent captured requests across sessions (newest first) with a cursor for the next (older) page
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/RecentEventsPage'}
 
     SuccessfulOperationResponse:
       description: Operation completed successfully

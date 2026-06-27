@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"gh.tarampamp.am/webhook-tester/v2/internal/config"
+	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/events_recent"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/firehose_subscribe"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/live"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/ready"
@@ -68,6 +69,7 @@ type OpenAPI struct {
 		requestDelete      func(context.Context, sID, rID) (*openapi.SuccessfulOperationResponse, error)
 		requestReplay      func(context.Context, sID, rID, *openapi.ReplayRequest) (*openapi.ReplayResponse, error)
 		sessionEvents      func(context.Context, sID, openapi.ApiSessionEventsParams) (*openapi.EventsResponse, error)
+		events             func(context.Context, openapi.ApiEventsParams) (*openapi.RecentEventsResponse, error)
 		appVersion         func() openapi.VersionResponse
 		appVersionLatest   func(context.Context, http.ResponseWriter) (*openapi.VersionResponse, error)
 		readinessProbe     func(context.Context, http.ResponseWriter, string)
@@ -112,6 +114,7 @@ func NewOpenAPI(
 	si.handlers.requestDelete = request_delete.New(appCtx, db, pubSub).Handle
 	si.handlers.requestReplay = request_replay.New(db).Handle
 	si.handlers.sessionEvents = session_events.New(db).Handle
+	si.handlers.events = events_recent.New(db).Handle
 	si.handlers.appVersion = version.New(appVersion.Version()).Handle
 	si.handlers.appVersionLatest = version_latest.New(lastAppVer).Handle
 	si.handlers.readinessProbe = ready.New(rdyChecker).Handle
@@ -318,6 +321,14 @@ func (o *OpenAPI) ApiSessionGetRequest(w http.ResponseWriter, r *http.Request, s
 
 func (o *OpenAPI) ApiSessionEvents(w http.ResponseWriter, r *http.Request, sID sID, params evParams) {
 	if resp, err := o.handlers.sessionEvents(r.Context(), sID, params); err != nil {
+		o.errorToJson(w, err, statusForError(err))
+	} else {
+		o.respToJson(w, resp)
+	}
+}
+
+func (o *OpenAPI) ApiEvents(w http.ResponseWriter, r *http.Request, params openapi.ApiEventsParams) {
+	if resp, err := o.handlers.events(r.Context(), params); err != nil {
 		o.errorToJson(w, err, statusForError(err))
 	} else {
 		o.respToJson(w, resp)

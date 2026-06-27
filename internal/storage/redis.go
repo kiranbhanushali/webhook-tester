@@ -578,3 +578,13 @@ func (s *Redis) ListRequestsAfter(_ context.Context, _ string, _ int64, _ int) (
 func (s *Redis) ListRequestsPage(_ context.Context, _ string, _ int64, _ int) ([]Request, error) {
 	return nil, ErrSearchUnsupported
 }
+
+// ListRecentRequests is not supported by the Redis driver for the same reason as ListRequestsPage:
+// it has no durable, never-reused global monotonic sequence to anchor a stable cross-session cursor.
+// Use the SQLite driver — the documented default — for the recent-events feed. Returns
+// ErrSearchUnsupported.
+func (s *Redis) ListRecentRequests(
+	_ context.Context, _ RecentRequestsFilter, _ int64, _ int,
+) ([]RecentRequest, error) {
+	return nil, ErrSearchUnsupported
+}

@@ -249,6 +249,11 @@ const sessionCols = `id, slug, group_name, code, headers_json, response_body, de
 
 const requestCols = `id, method, body, headers_json, url, client_addr, created_at_ms, seq, authorized`
 
+// recentRequestCols mirrors requestCols (aliased to the joined requests table r) plus the
+// originating session's id and slug, for the cross-session ListRecentRequests feed.
+const recentRequestCols = `r.id, r.method, r.body, r.headers_json, r.url, r.client_addr, ` +
+	`r.created_at_ms, r.seq, r.authorized, r.session_id, s.slug`
+
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -669,6 +674,71 @@ func (s *SQLite) ListRequestsPage(ctx context.Context, sID string, beforeSeq int
 
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate requests: %w", err)
+	}
+
+	return out, nil
+}
+
+// ListRecentRequests returns the most-recent captured requests across all (non-expired) sessions
+// (optionally filtered to one session and/or group), ordered by the global seq DESC (newest first),
+// capped at limit. When beforeSeq > 0 only requests with seq < beforeSeq are returned (older page).
+// It uses the idx_requests_seq index for the global seq-ordered scan and joins sessions for the
+// slug + group filter. It backs the unified dashboard event viewer.
+func (s *SQLite) ListRecentRequests(
+	ctx context.Context, f RecentRequestsFilter, beforeSeq int64, limit int,
+) ([]RecentRequest, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var (
+		conds = []string{"(s.long_lived = 1 OR s.expires_at_ms > ?)"}
+		args  = []any{s.timeNow().UnixMilli()}
+	)
+
+	if beforeSeq > 0 {
+		conds = append(conds, "r.seq < ?")
+		args = append(args, beforeSeq)
+	}
+
+	if f.Session != "" {
+		conds = append(conds, "r.session_id = ?")
+		args = append(args, f.Session)
+	}
+
+	if f.Group != "" {
+		conds = append(conds, "s.group_name = ?")
+		args = append(args, f.Group)
+	}
+
+	args = append(args, limit)
+
+	var q = `SELECT ` + recentRequestCols + ` FROM requests r JOIN sessions s ON s.id = r.session_id WHERE ` +
+		strings.Join(conds, " AND ") + ` ORDER BY r.seq DESC LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list recent requests: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []RecentRequest
+
+	for rows.Next() {
+		rr, sErr := scanRecentRequest(rows)
+		if sErr != nil {
+			return nil, sErr
+		}
+
+		out = append(out, rr)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent requests: %w", err)
 	}
 
 	return out, nil
@@ -1105,6 +1175,43 @@ func scanRequest(sc rowScanner) (string, *Request, error) {
 	}, nil
 }
 
+// scanRecentRequest scans a joined requests+sessions row into a RecentRequest (the embedded
+// Request plus the originating session's ID and slug). The column order matches recentRequestCols.
+func scanRecentRequest(sc rowScanner) (RecentRequest, error) {
+	var (
+		id, method, headersJSON, reqURL, clientAddr, sessionID, sessionSlug string
+		body                                                                []byte
+		createdMs, seq                                                      int64
+		authorized                                                          int
+	)
+
+	if err := sc.Scan(&id, &method, &body, &headersJSON, &reqURL, &clientAddr, &createdMs, &seq,
+		&authorized, &sessionID, &sessionSlug); err != nil {
+		return RecentRequest{}, err
+	}
+
+	headers, err := unmarshalHeaders(headersJSON)
+	if err != nil {
+		return RecentRequest{}, err
+	}
+
+	return RecentRequest{
+		Request: Request{
+			ID:                 id,
+			ClientAddr:         clientAddr,
+			Method:             method,
+			Body:               body,
+			Headers:            headers,
+			URL:                reqURL,
+			CreatedAtUnixMilli: createdMs,
+			Seq:                seq,
+			Authorized:         authorized != 0,
+		},
+		SessionID:   sessionID,
+		SessionSlug: sessionSlug,
+	}, nil
+}
+
 // marshalHeaders encodes headers as a JSON array, never producing NULL.
 func marshalHeaders(h []HttpHeader) (string, error) {
 	if len(h) == 0 {
@@ -1203,6 +1310,15 @@ func migrateRequestSeq(ctx context.Context, db *sql.DB) error {
 	if _, err = db.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_requests_session_seq ON requests(session_id, seq)`); err != nil {
 		return fmt.Errorf("create seq index: %w", err)
+	}
+
+	// Global seq index backs the cross-session recent-events feed (ListRecentRequests), which scans
+	// requests in global seq DESC order across all sessions. Created here (not in the schema file)
+	// for the same reason as the composite index: a pre-existing database may lack the seq column
+	// when the schema batch runs.
+	if _, err = db.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_requests_seq ON requests(seq)`); err != nil {
+		return fmt.Errorf("create global seq index: %w", err)
 	}
 
 	// Ensure the durable counter never sits below an already-assigned seq (e.g. after a
