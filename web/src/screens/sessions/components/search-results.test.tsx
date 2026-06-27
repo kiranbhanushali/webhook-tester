@@ -118,6 +118,21 @@ describe('IdentifierSearch', () => {
     )
   })
 
+  test('shows loading state while the search is in flight', async () => {
+    // Never-resolving promise keeps the component in the loading state
+    mockSearchIdentifiers.mockReturnValue(new Promise(() => {}))
+    renderSearch()
+
+    fireEvent.change(screen.getByRole('textbox', { name: /identifier value/i }), {
+      target: { value: 'pending' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/searching/i)).toBeInTheDocument()
+    })
+  })
+
   test('shows "no results" state after search returns empty', async () => {
     mockSearchIdentifiers.mockResolvedValue([])
     renderSearch()

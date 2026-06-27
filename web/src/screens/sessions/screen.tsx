@@ -1,4 +1,4 @@
-import { Badge, Button, Group, Select, Skeleton, Table, Text, TextInput, Title } from '@mantine/core'
+import { Badge, Button, Divider, Group, Select, Skeleton, Table, Text, TextInput, Title } from '@mantine/core'
 import { notifications as notify } from '@mantine/notifications'
 import { IconList, IconSearch, IconTrash } from '@tabler/icons-react'
 import dayjs from 'dayjs'
@@ -118,6 +118,8 @@ export function SessionsListScreen(): React.JSX.Element {
   return (
     <div className={styles.container}>
       <IdentifierSearch />
+
+      <Divider my="md" />
 
       <Group mb="md" align="center">
         <IconList size="1.4em" />

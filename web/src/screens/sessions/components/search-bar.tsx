@@ -52,7 +52,11 @@ export function SearchBar({ onSearch }: Props): React.JSX.Element {
       <Group>
         <SegmentedControl
           value={match}
-          onChange={(v) => setMatch(v as 'exact' | 'prefix')}
+          onChange={(v) => {
+            if (v === 'exact' || v === 'prefix') {
+              setMatch(v)
+            }
+          }}
           data={[
             { value: 'exact', label: 'Exact' },
             { value: 'prefix', label: 'Prefix' },

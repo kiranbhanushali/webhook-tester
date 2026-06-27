@@ -1,4 +1,4 @@
-import { Alert, Button, Divider, Stack, Table, Text, Title } from '@mantine/core'
+import { Alert, Button, Stack, Table, Text, Title } from '@mantine/core'
 import { IconAlertCircle, IconSearch } from '@tabler/icons-react'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -108,8 +108,6 @@ export function IdentifierSearch(): React.JSX.Element {
           </Table.Tbody>
         </Table>
       )}
-
-      <Divider />
     </Stack>
   )
 }
