@@ -1,66 +1,79 @@
 <p align="center">
-  <a href="https://github.com/tarampampam/webhook-tester#readme">
+  <a href="https://github.com/kiranbhanushali/webhook-tester#readme">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/tarampampam/webhook-tester/image?description=1&font=Raleway&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2Fuser-attachments%2Fassets%2Fe2e659dc-7fb1-4ac2-ad3c-883899f5fc38&owner=1&pulls=1&pattern=Solid&stargazers=1&theme=Dark">
-      <img align="center" src="https://socialify.git.ci/tarampampam/webhook-tester/image?description=1&font=Raleway&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2Fuser-attachments%2Fassets%2Fe2e659dc-7fb1-4ac2-ad3c-883899f5fc38&owner=1&pulls=1&pattern=Solid&stargazers=1&theme=Light">
+      <source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/kiranbhanushali/webhook-tester/image?description=1&font=Raleway&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2Fuser-attachments%2Fassets%2Fe2e659dc-7fb1-4ac2-ad3c-883899f5fc38&owner=1&pulls=1&pattern=Solid&stargazers=1&theme=Dark">
+      <img align="center" src="https://socialify.git.ci/kiranbhanushali/webhook-tester/image?description=1&font=Raleway&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2Fuser-attachments%2Fassets%2Fe2e659dc-7fb1-4ac2-ad3c-883899f5fc38&owner=1&pulls=1&pattern=Solid&stargazers=1&theme=Light">
     </picture>
   </a>
 </p>
 
-# WebHook Tester
+# WebHook Tester —  fork
 
-This application allows you to test and debug webhooks and HTTP requests using unique, randomly generated URLs. You
-can customize the response code, `Content-Type` HTTP header, response content, and even set a delay for responses.
+> **A fork of [tarampampam/webhook-tester](https://github.com/tarampampam/webhook-tester).** It keeps the upstream's
+> fast Go core and embedded React UI, and adds a layer of capabilities aimed at debugging **real, long-running
+> callback integrations** — capturing provider callbacks, searching for a specific transaction by identifier,
+> signing responses, and re-delivering a captured request. It was built for bank / callback integration
+> integration testing, where callbacks carry identifiers like `trackingId` / `referenceId`, but nothing here is
+> specific — it's a general-purpose, self-hosted webhook debugger.
+
+This application lets you test and debug webhooks and HTTP requests using unique URLs. You can customize the response
+code, headers, body, and even a response delay — and, in this fork, generate the response dynamically from the
+incoming request, search captured requests by identifier, and replay them downstream.
 
 Consider it a free and self-hosted alternative to [webhook.site](https://github.com/fredsted/webhook.site),
 [requestinspector.com](https://requestinspector.com/), and similar services.
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/26e56d78-8a10-4883-9052-d18047206fda" alt="screencast" />
-</p>
+Built with Go for high performance, with a lightweight `ReactJS` UI compiled into the binary, so no additional assets
+are required. WebSocket support provides real-time webhook notifications in the UI — no third-party services needed.
 
-> [!TIP]
-> The demo is available at [wh.tarampamp.am](https://wh.tarampamp.am/). Please note that it is quite limited,
-> does not persist data, and may be unavailable sometimes, but feel free to try it.
+## ✨ What this fork adds
 
-Built with Go for high performance, this application includes a lightweight UI (written in `ReactJS`) that’s compiled
-into the binary, so no additional assets are required. WebSocket support provides real-time webhook notifications in
-the UI - no need for third-party solutions like `pusher.com`!
+Everything below is **net-new on top of upstream** (see [Credits](#-credits--upstream)). Each links to its details.
 
-### 🔥 Features list
+- **[Pure-Go SQLite storage (now the default)](#-storage)** — a single embedded DB file via `modernc.org/sqlite`
+  (no CGO, still a single static binary / `scratch` image). Survives restarts and makes identifier search **fully
+  indexed**.
+- **[Identifier search](#identifier-search)** — find a captured request by `trackingId` / `referenceId` (or any
+  configurable key) across the JSON body, query string, and headers. Index-backed on SQLite, with an in-memory hot
+  index for instant recent lookups.
+- **[Human-readable slugs, groups & long-lived sessions](#webhook-capture-url-slugs--groups)** — address endpoints
+  by `my-callback` instead of a UUID, organise them into groups, and keep a fixed callback URL valid
+  indefinitely.
+- **[Dynamic response templates](#dynamic-response-templates)** — a Go `text/template` evaluated against the incoming
+  request to build the response body and status, with signing helpers (`hmacSHA256`, `sha256`, …) and an `@status`
+  directive.
+- **[Replay](#replay)** — re-deliver any captured request to a target URL (or the session's forward URL) using its
+  original method, body, and headers.
+- **[FIFO events API](#fifo-events-api-incremental-polling)** — pull a session's requests in order via a durable,
+  never-reused cursor for exactly-once incremental polling.
+- **[Per-endpoint inbound auth](#-per-endpoint-inbound-auth)** — require a secret header on the public capture path;
+  unauthorized calls are still recorded (and flagged) but get a `401`.
+- **[Firehose + unified dashboard](#-firehose--unified-dashboard)** — a single all-sessions live WebSocket stream and
+  a redesigned dashboard (endpoint rail + live stream + request detail drawer).
+- **[JSON-query selector in the payload viewer](#json-query-selector)** — pull a value out of a captured JSON payload
+  with `data.txn.trackingId` / `items[*].id`, no dependencies.
+- **[Paginated requests list with infinite scroll](#paginated-requests-list)** — cursor-paginated, newest-first
+  request history that loads more as you scroll.
+- **[Shared-token dashboard/API auth](#-dashboard--api-authentication)** — protect the dashboard and all `/api`
+  endpoints with a single token; the webhook-capture path stays public.
 
-- Standalone operation with no third-party dependencies needed (persistent **SQLite** storage by default; memory/Redis/fs also available)
-- Fully customizable response code, headers, and body for webhooks
-- **Dynamic response templates** (Go `text/template`) with signing helpers (e.g. `hmacSHA256`) and an `@status` directive
-- **Human-readable session slugs** and **groups**, plus optional **long-lived** (non-expiring) sessions
-- **Identifier search** across captured requests (e.g. by `trackingId` / `referenceId`), index-backed on SQLite
-- **FIFO events API** with a durable offset cursor for no-skip / no-duplicate incremental polling
-- **Replay** any captured request to a target URL (or the session's forward URL)
-- **Per-session security headers** applied to every response, and an optional **shared-token auth** for the dashboard/API
-- Option to expose your locally running instance to the global internet (via tunneling)
-- Fast, built-in UI based on `ReactJS`
-- Multi-architecture Docker image based on `scratch`
-- Runs as an unprivileged user in Docker
-- Well-tested, documented source code
-- CLI health check sub-command included
-- Binary view of recorded requests in UI
-- Supports JSON and human-readable logging formats
-- Liveness probes (`/healthz` endpoint)
-- Customizable webhook responses
-- Built-in WebSocket support
-- Efficient in memory and CPU usage
-- Free, open-source, and scalable
+### Inherited from upstream
+
+Standalone operation (no third-party dependencies), fully customizable response code/headers/body, optional public
+tunneling (`ngrok`), built-in WebSocket notifications, a `scratch`-based multi-arch Docker image running as an
+unprivileged user, a CLI health-check sub-command, JSON / human-readable logging, liveness probes (`/healthz`), a
+binary view of recorded requests, and efficient memory/CPU usage.
 
 ### 🗃 Storage
 
-The app supports 4 storage drivers: **sqlite** (default), **memory**, **Redis** and **fs** (configured with the
-`--storage-driver` flag).
+The app supports 4 storage drivers: **sqlite** (default, added by this fork), **memory**, **Redis** and **fs**
+(configured with the `--storage-driver` flag).
 
 - **SQLite** driver (**default**): A single embedded database file (`--sqlite-path`, default `./webhook-tester.db`)
   using the pure-Go `modernc.org/sqlite` engine (no CGO). Data survives restarts and, crucially, identifier search
   (see below) is **fully indexed**, so it stays fast over long histories. This is the recommended driver for the
   callback-debugging workflow.
-- **Memory** driver: Ideal for local debugging when persistent storage isn’t needed, as recorded requests are cleared
+- **Memory** driver: Ideal for local debugging when persistent storage isn't needed, as recorded requests are cleared
   upon app shutdown. Identifier search falls back to a non-indexed scan.
 - **Redis** driver: Retains data across app restarts, suitable for environments where data persistence is required.
   Redis is also necessary when running multiple instances behind a load balancer.
@@ -68,7 +81,7 @@ The app supports 4 storage drivers: **sqlite** (default), **memory**, **Redis** 
 
 > [!NOTE]
 > When running the Docker image with the sqlite driver, point `SQLITE_PATH` at a writable, mounted volume (e.g.
-> `-e SQLITE_PATH=/data/wh.db -v "$(pwd)/.wh-data:/data"`); the image’s root filesystem is read-only.
+> `-e SQLITE_PATH=/data/wh.db -v "$(pwd)/.wh-data:/data"`); the image's root filesystem is read-only.
 
 ### 📢 Pub/Sub
 
@@ -88,11 +101,10 @@ You'll never miss a request!
 
 ## 🛰 Sessions, search, events, replay & dynamic responses
 
-Beyond the basic capture-and-inspect flow, this build adds a set of capabilities aimed at debugging real,
-long-running callback integrations (capturing provider callbacks, finding a specific transaction, signing
-responses, and re-delivering a captured request). All of the dashboard/data endpoints below live under `/api`
-and are protected by the optional shared token (see [Authentication](#-authentication)); the webhook-capture
-path `/w/...` is always public.
+Beyond the basic capture-and-inspect flow, this fork adds a set of capabilities aimed at debugging real,
+long-running callback integrations. All of the dashboard/data endpoints below live under `/api` and are protected
+by the optional shared token (see [Authentication](#-dashboard--api-authentication)); the webhook-capture path
+`/w/...` is always public (optionally gated by [per-endpoint inbound auth](#-per-endpoint-inbound-auth)).
 
 ### Webhook capture URL, slugs & groups
 
@@ -182,7 +194,7 @@ POST /api/session/{ref}/requests/{request_uuid}/replay
 ```
 
 If `target_url` is omitted, the session's configured `forward_url` is used. The response reports the **downstream**
-result: `status_code`, `headers` and `body_base64`.
+result: `status_code`, `headers` and `body_base64`. Redirects are **not** followed.
 
 > [!WARNING]
 > Replay is an operator-facing tool and performs **no SSRF protection** — the target URL is fully trusted. Do not
@@ -233,7 +245,64 @@ on the session — scripts cannot set headers.)
 A session's `security_headers` (name/value pairs) are added to **every** captured-request response, on both the
 script and the static-response paths — handy for asserting things like `X-Content-Type-Options: nosniff`.
 
-### 🔐 Authentication
+### 🛡 Per-endpoint inbound auth
+
+Independently of the dashboard/API token, an individual capture endpoint can require a secret on the **public**
+`/w/{ref}/...` path. Configure two session fields:
+
+| Session field | Meaning |
+|---------------|---------|
+| `inbound_auth_header` | name of the header the caller must send (empty = endpoint is open) |
+| `inbound_auth_value`  | the expected secret value |
+
+When `inbound_auth_header` is set, each incoming webhook must present that header with a value matching
+`inbound_auth_value` (compared in constant time). On mismatch the app responds `401`
+(`{"error":"unauthorized webhook"}`) and **skips** the response script / static response. The request is **still
+captured** either way and carries an `authorized` boolean, so you can see — and search — calls that failed auth.
+In the UI, unauthorized requests show a red **Unauthorized** badge in the request detail and live stream.
+
+### 🔭 Firehose + unified dashboard
+
+The original UI showed one session at a time over a per-session WebSocket. This fork adds a single **firehose**
+stream and a redesigned dashboard on top of it:
+
+- **Firehose stream** — `GET /api/firehose/subscribe` (WebSocket, operator-only) pushes a `create` event for
+  **every** captured request across **all** sessions. Each event carries `action`, `session_uuid`, `session_slug`
+  and a compact `request` (`uuid`, `client_address`, `method`, `url`, `captured_at_unix_milli`, `authorized`).
+  Headers and bodies are intentionally **omitted** from firehose events (fetch the full request from its session)
+  so no inbound-auth secrets travel over the cross-session topic.
+- **Unified dashboard** — an **endpoint rail** (all sessions, with request counts and a pulsing "live" dot when an
+  endpoint received a request in the last few seconds), an **all-sessions live stream** in the centre, and a
+  **request detail drawer** that slides in when you click a row. Pick "All endpoints" for the cross-session view or
+  a single endpoint to filter.
+
+### JSON-query selector
+
+When a captured payload is valid JSON, the payload viewer shows a small query box for pulling a value straight out
+of it. The evaluator is **dependency-free** and supports:
+
+- dotted paths — `data.txn.trackingId`, `.a.b`
+- array indices — `items[0]`, `[0]`
+- bracketed/quoted keys — `data["weird key"]`
+- wildcards — `items[*].id` (collect a field from every element), `data.*` (all values of an object)
+
+It resolves **own-properties only** (never `__proto__` / `constructor`), and updates the result as you type.
+
+### Paginated requests list
+
+A session's request history is **cursor-paginated, newest-first**. The list loads the first page and then fetches
+older pages automatically as you scroll (infinite scroll via an intersection observer). New requests arriving over
+the WebSocket are prepended live, and already-seen requests are de-duplicated when older pages load.
+
+```
+GET /api/session/{ref}/requests?before={cursor}&limit={n}
+```
+
+Omit `before` (or pass `0`) for the newest page, then pass the returned `next_before` as `before` to fetch the next
+(older) page. The response (`CapturedRequestsPage`) carries `items[]`, `next_before` (the next cursor) and
+`has_more`. Each item's `seq` is the durable capture sequence used as the cursor.
+
+### 🔐 Dashboard / API authentication
 
 Set `--auth-token` (env `AUTH_TOKEN`) to protect the **dashboard and all `/api` endpoints** with a shared token.
 The webhook-capture path (`/w/...`) and the health probes (`/healthz`, `/ready`) stay **public**. An empty token
@@ -249,65 +318,75 @@ Two ways to present the token:
 curl -H "Authorization: Bearer secret-token" http://localhost:8080/api/sessions
 ```
 
+> [!NOTE]
+> This dashboard/API token is **separate** from [per-endpoint inbound auth](#-per-endpoint-inbound-auth): the former
+> gates the operator-facing dashboard/API, the latter gates an individual public capture endpoint.
+
 ## ⁉ FAQ
 
 **Can I have pre-defined (static) webhook URLs (sessions) to ensure that the sent request will be captured even
 without data persistence?**
 
-Yes, simply use the `--auto-create-sessions` flag or set the `AUTO_CREATE_SESSIONS=true` environment variable. In
-`v1`, you needed to define sessions during app startup to enable this functionality. However, since `v2`, all you
-need to do is enable this feature. It works quite simply - if the incoming request contains a UUID-formatted prefix
-(e.g., `http://app/11111111-2222-3333-4444-555555555555/...`), a session for this request will be created
-automatically. All that's left for you to do is open the session in the UI
+Yes, simply use the `--auto-create-sessions` flag or set the `AUTO_CREATE_SESSIONS=true` environment variable. If
+the incoming request contains a UUID-formatted prefix (e.g.,
+`http://app/11111111-2222-3333-4444-555555555555/...`), a session for this request will be created automatically.
+All that's left for you to do is open the session in the UI
 (`http://app/s/11111111-2222-3333-4444-555555555555`).
+
+> [!TIP]
+> With the default **sqlite** driver, sessions and requests persist across restarts anyway, so a slug-based callback
+> URL such as `/w/my-callback/...` stays valid without `--auto-create-sessions`.
 
 ## 🧩 Installation
 
-Download the latest binary for your architecture from the [releases page][link_releases]. For example, to install
-on an **amd64** system (e.g., Debian, Ubuntu):
+This fork doesn't publish prebuilt release binaries or container images — build it from source. You need **Go 1.26+**
+and **Node.js** (for the embedded frontend). The frontend is compiled into the Go binary, so the build is a single
+static artifact with no runtime assets.
 
-[link_releases]:https://github.com/tarampampam/webhook-tester/releases
+### Docker (recommended)
+
+The `Dockerfile` builds the frontend and the Go binary in one shot and produces a minimal `scratch`-based image:
 
 ```shell
-curl -SsL -o ./webhook-tester https://github.com/tarampampam/webhook-tester/releases/latest/download/webhook-tester-linux-amd64
-chmod +x ./webhook-tester
+git clone https://github.com/kiranbhanushali/webhook-tester.git
+cd webhook-tester
+docker build -t webhook-tester .
+docker run --rm -t -p "8080:8080/tcp" webhook-tester
+```
+
+### From source
+
+```shell
+git clone https://github.com/kiranbhanushali/webhook-tester.git
+cd webhook-tester
+
+# build the embedded frontend (outputs to web/dist, which the Go binary embeds)
+npm --prefix ./web ci
+npm --prefix ./web run build
+
+# build the binary (the frontend is embedded into it)
+go build -o webhook-tester ./cmd/webhook-tester
 ./webhook-tester start
 ```
 
 > [!TIP]
-> Each release includes binaries for **linux**, **darwin** (macOS) and **windows** (`amd64` and `arm64` architectures).
-> You can download the binary for your system from the [releases page][link_releases] (section `Assets`). And - yes,
-> all what you need is just download and run single binary file.
-
-Alternatively, you can use the Docker image:
-
-| Registry                               | Image                                |
-|----------------------------------------|--------------------------------------|
-| [GitHub Container Registry][link_ghcr] | `ghcr.io/tarampampam/webhook-tester` |
-| [Docker Hub][link_docker_hub] (mirror) | `tarampampam/webhook-tester`         |
-
-> [!NOTE]
-> It’s recommended to avoid using the `latest` tag, as **major** upgrades may include breaking changes.
-> Instead, use specific tags in `X.Y.Z` format for version consistency.
-
-To install it on Kubernetes (K8s), please use the Helm chart from [ArtifactHUB][artifact-hub].
-
-[artifact-hub]:https://artifacthub.io/packages/helm/webhook-tester/webhook-tester
+> A `Makefile` + `compose.yml` are included for a containerised dev workflow: `make up` starts the Go server
+> (`:8080`) and the Vite dev server (`:8081`) with hot reload. See `make help` for all targets.
 
 ## ⚙ Usage
 
-The easiest way to run the app is by using the Docker image:
+Start the app (after building per [Installation](#-installation)):
 
 ```shell
-docker run --rm -t -p "8080:8080/tcp" ghcr.io/tarampampam/webhook-tester:2
+docker run --rm -t -p "8080:8080/tcp" webhook-tester
 ```
 
 > [!NOTE]
-> This command starts the app with the default configuration on port `8080` (the first port in the `-p` argument is
-> the host port, and the second is the application port inside the container).
+> This starts the app with the default configuration on port `8080` (the first port in `-p` is the host port, the
+> second is the application port inside the container).
 
-Next, open your browser at [`localhost:8080`](http://localhost:8080) to begin testing your webhooks. To stop the app, press `Ctrl+C` in
-the terminal where it's running.
+Open your browser at [`localhost:8080`](http://localhost:8080) to begin testing your webhooks. To stop the app,
+press `Ctrl+C` in the terminal where it's running.
 
 For a **persistent + token-protected** instance (sqlite database on a mounted volume, dashboard/API behind a shared
 token, webhook path still public):
@@ -318,13 +397,10 @@ docker run --rm -t -p "8080:8080/tcp" \
   -e STORAGE_DRIVER=sqlite \
   -e SQLITE_PATH=/data/wh.db \
   -v "$(pwd)/.wh-data:/data" \
-  ghcr.io/tarampampam/webhook-tester:2
+  webhook-tester
 ```
 
 For custom configuration options, refer to the CLI help below or execute the app with the `--help` flag.
-
-[link_ghcr]:https://github.com/users/tarampampam/packages/container/package/webhook-tester
-[link_docker_hub]:https://hub.docker.com/r/tarampampam/webhook-tester/
 
 <!--GENERATED:CLI_DOCS-->
 <!-- Documentation inside this block generated by github.com/urfave/cli-docs/v3; DO NOT EDIT -->
@@ -402,24 +478,21 @@ The following flags are supported:
 
 <!--/GENERATED:CLI_DOCS-->
 
-## 🧠 A note on AI-assisted development
+## 🙏 Credits & upstream
 
-AI tools are great assistants - they can autocomplete, review, summarize, and help you move faster. But they’re not a
-substitute for understanding what's going on. If you're using AI to contribute here, please make sure you actually
-read, understand, and stand behind the changes you’re proposing.
+This is a fork of **[tarampampam/webhook-tester](https://github.com/tarampampam/webhook-tester)** by
+[@tarampampam](https://github.com/tarampampam), which provides the Go core, the embedded React UI, the OpenAPI-driven
+handler architecture, the pubsub→WebSocket live updates, the memory/Redis/fs storage drivers, and the ngrok tunnel
+integration. All of that hard work belongs to the upstream project and its contributors — huge thanks.
 
-I personally write my code myself, and I encourage others to do the same. Not because AI is "bad", but because blindly
-trusting generated code tends to produce... let's say creative results.
-
-And honestly, I'm still waiting for the day "AI-free software" becomes a trend - like organic food, but for code 😄 
-Until then: trust, but verify.
+The features under [What this fork adds](#-what-this-fork-adds) were built on top of that base for callback /
+callback-integration debugging. The upstream demo is at [wh.tarampamp.am](https://wh.tarampamp.am/) (it does not include
+this fork's additions).
 
 ## 🤖 AI Agent Instructions
 
-See [AGENTS.md](AGENTS.md) for detailed guidelines for AI agents working with this repository.
+See [AGENTS.md](AGENTS.md) for guidelines for AI agents working with this repository.
 
 ## License
 
-This is open-sourced software licensed under the [MIT License][link_license].
-
-[link_license]:https://github.com/tarampampam/webhook-tester/blob/master/LICENSE
+This is open-sourced software licensed under the [MIT License](LICENSE), inherited from the upstream project.
