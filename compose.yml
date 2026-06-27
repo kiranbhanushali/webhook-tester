@@ -61,6 +61,7 @@ services:
       LOG_LEVEL: info
     volumes: [app-sqlite-data:/data:rw]
     ports: ['8082:8080/tcp'] # open http://127.0.0.1:8082
+    restart: unless-stopped # production-like: survive crashes/host reboots, stop only on explicit `down`/stop
     security_opt: [no-new-privileges:true] # the image already defines a HEALTHCHECK
 
   redis:

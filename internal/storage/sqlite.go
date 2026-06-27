@@ -106,8 +106,11 @@ func NewSQLite(
 	// connection pool, two pooled connections can each open a transaction and then
 	// race to upgrade to a write lock, producing a true deadlock that busy_timeout
 	// cannot resolve - SQLite aborts one side with SQLITE_BUSY. Pinning the pool to a
-	// single connection serializes all access and makes writes contention-safe (WAL
-	// still keeps reads fast). This is the canonical database/sql + SQLite setup.
+	// single connection serializes ALL access (reads AND writes) through one connection,
+	// so WAL's concurrent-reader benefit is moot at the pool layer. For a single-process
+	// webhook-testing tool the throughput penalty is negligible; WAL is retained for
+	// correctness and is immediately effective if this limit is later relaxed. This is
+	// the canonical database/sql + SQLite setup.
 	db.SetMaxOpenConns(1)
 
 	if err = db.PingContext(ctx); err != nil {

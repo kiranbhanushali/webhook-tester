@@ -150,7 +150,7 @@ fast path. The memory/fs drivers fall back to a non-indexed scan.
 
 ```jsonc
 {
-  "events":      [ { "seq": 1, "uuid": "…", "method": "POST", "request_payload_base64": "…", "headers": […], "url": "…", "captured_at_unix_milli": … }, … ],
+  "events":      [ { "seq": 1, "uuid": "…", "client_address": "…", "method": "POST", "request_payload_base64": "…", "headers": […], "url": "…", "captured_at_unix_milli": … }, … ],
   "next_cursor": 2,      // pass this as `after` on the next poll
   "has_more":    true    // true when the page was full (more may remain)
 }
