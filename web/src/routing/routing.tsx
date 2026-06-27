@@ -4,10 +4,12 @@ import { DefaultLayout } from '~/screens'
 import { NotFoundScreen } from '~/screens/not-found'
 import { SessionAndRequestScreen } from '~/screens/session'
 import { HomeScreen } from '~/screens/home'
+import { DashboardScreen } from '~/screens/dashboard'
 import { SessionsListScreen } from '~/screens/sessions'
 
 export enum RouteIDs {
   Home = 'home',
+  Dashboard = 'dashboard',
   SessionAndRequest = 'session-and-request',
   SessionsList = 'sessions-list',
 }
@@ -22,6 +24,11 @@ export const createRoutes = (apiClient: Client): RouteObject[] => [
         index: true,
         element: <HomeScreen />,
         id: RouteIDs.Home,
+      },
+      {
+        path: 'dashboard',
+        id: RouteIDs.Dashboard,
+        element: <DashboardScreen />,
       },
       {
         // redirect to the home screen if the path is just `/s/`
@@ -62,6 +69,8 @@ export function pathTo<T extends RouteIDs>(
   switch (path) {
     case RouteIDs.Home:
       return createPath({ pathname: '/' })
+    case RouteIDs.Dashboard:
+      return createPath({ pathname: '/dashboard' })
     case RouteIDs.SessionsList:
       return createPath({ pathname: '/sessions' })
     case RouteIDs.SessionAndRequest: {

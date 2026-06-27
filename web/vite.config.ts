@@ -64,5 +64,10 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './vitest.setup.js',
+    // Some heavy Mantine component tests (modal + accordion + userEvent) legitimately take several
+    // seconds; under full file-parallelism on a loaded machine they can exceed the 5s default. Give
+    // them generous headroom so the suite is deterministic regardless of host load.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 })

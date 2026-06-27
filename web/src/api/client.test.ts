@@ -482,7 +482,7 @@ describe('subscribeFirehose', () => {
   })
 
   const lastWS = (): FakeWebSocket => {
-    const ws = FakeWebSocket.instances.at(-1)
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]
     if (!ws) {
       throw new Error('no WebSocket was constructed')
     }

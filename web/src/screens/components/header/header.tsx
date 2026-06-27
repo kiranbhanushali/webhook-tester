@@ -7,6 +7,7 @@ import {
   IconCirclePlusFilled,
   IconCopy,
   IconHelpHexagonFilled,
+  IconLayoutDashboard,
   IconList,
   IconRefreshAlert,
   IconUsersGroup,
@@ -63,6 +64,18 @@ export const Header: React.FC<{
             fit="scale-down"
             title={currentVersion ? 'v' + currentVersion.toString() : undefined}
           />
+          <Button
+            variant="gradient"
+            gradient={{ from: 'teal', to: 'cyan', deg: 90 }}
+            size="xs"
+            leftSection={<IconLayoutDashboard size="1.3em" />}
+            component={Link}
+            to={pathTo(RouteIDs.Dashboard)}
+            visibleFrom="sm"
+          >
+            Dashboard
+          </Button>
+
           <Button.Group visibleFrom="sm">
             <Button
               variant="default"

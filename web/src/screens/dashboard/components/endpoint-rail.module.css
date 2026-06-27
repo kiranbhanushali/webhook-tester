@@ -1,0 +1,40 @@
+.item {
+  display: block;
+  width: 100%;
+  border-radius: var(--mantine-radius-sm);
+  padding: 0.4rem 0.55rem;
+  transition: background-color 100ms ease;
+}
+
+.item:hover {
+  background-color: var(--mantine-color-default-hover);
+}
+
+.itemActive {
+  background-color: var(--mantine-color-default-hover);
+  box-shadow: inset 3px 0 0 0 var(--mantine-color-teal-6);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--mantine-color-green-6);
+  flex: 0 0 auto;
+  animation: rail-pulse 1.4s ease-out infinite;
+}
+
+@keyframes rail-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--mantine-color-green-5);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(0, 0, 0, 0);
+    opacity: 0.85;
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+    opacity: 1;
+  }
+}

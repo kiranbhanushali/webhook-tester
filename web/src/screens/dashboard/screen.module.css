@@ -1,0 +1,28 @@
+.layout {
+  display: flex;
+  gap: var(--mantine-spacing-lg);
+  align-items: flex-start;
+}
+
+.rail {
+  flex: 0 0 250px;
+  position: sticky;
+  top: var(--mantine-spacing-md);
+}
+
+.stream {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 48em) {
+  .layout {
+    flex-direction: column;
+  }
+
+  .rail {
+    position: static;
+    flex-basis: auto;
+    width: 100%;
+  }
+}
