@@ -22,67 +22,14 @@ import {
 import { notifications as notify } from '@mantine/notifications'
 import { useData, type Session } from '~/shared'
 import { ScriptHelpButton } from './script-help'
-
-/** Regex for a valid session slug: starts with [a-z0-9], followed by 1-48 chars of [a-z0-9-] */
-const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{1,48}$/
-
-/** Validate a slug: empty is OK; non-empty must match the regex. */
-const validateSlug = (v: string): boolean => v === '' || SLUG_REGEX.test(v)
-
-/** Validate a forward URL: empty is OK; non-empty must be a valid http/https URL. */
-const validateForwardUrl = (v: string): boolean => {
-  if (!v) return true
-  try {
-    const u = new URL(v)
-    return u.protocol === 'http:' || u.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-
-/** Header validation limits (mirrors the create modal). */
-const HEADER_LIMITS = {
-  maxCount: 10,
-  minNameLen: 1,
-  maxNameLen: 40,
-  maxValueLen: 2048,
-}
-
-/** Validate headers in the "Name: Value" per-line format. */
-const validateHeaders = (text: string): boolean => {
-  if (!text.trim()) return true
-
-  const rows = headersTextToHeaders(text)
-
-  return (
-    rows.length <= HEADER_LIMITS.maxCount &&
-    rows.every(
-      (h) =>
-        h.name.length >= HEADER_LIMITS.minNameLen &&
-        h.name.length <= HEADER_LIMITS.maxNameLen &&
-        h.value.length <= HEADER_LIMITS.maxValueLen &&
-        /^[a-zA-Z0-9-]+$/i.test(h.name) &&
-        /^[^\r\n]*$/i.test(h.value) &&
-        h.name.trim().length > 0 &&
-        h.value.trim().length > 0
-    )
-  )
-}
-
-/** Convert "Name: Value" text to an array of {name, value} objects. */
-const headersTextToHeaders = (text: string): Array<{ name: string; value: string }> =>
-  text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const [name, ...valueParts] = line.split(': ')
-      return { name: name.trim(), value: valueParts.join(': ').trim() }
-    })
-
-/** Convert an array of {name, value} objects to "Name: Value" text. */
-const headersToText = (headers: ReadonlyArray<{ name: string; value: string }>): string =>
-  headers.map((h) => `${h.name}: ${h.value}`).join('\n')
+import {
+  HEADER_LIMITS,
+  headersTextToHeaders,
+  headersToText,
+  validateForwardUrl,
+  validateHeadersText,
+  validateSlug,
+} from './session-validation'
 
 export const SessionEditor: React.FC<{
   session: Readonly<Session>
@@ -111,8 +58,8 @@ export const SessionEditor: React.FC<{
   const wrongSlug = useMemo(() => !validateSlug(slug), [slug])
   const wrongStatusCode = useMemo(() => statusCode < 100 || statusCode > 530, [statusCode])
   const wrongDelay = useMemo(() => delay < 0 || delay > 30, [delay])
-  const wrongHeaders = useMemo(() => !validateHeaders(headers), [headers])
-  const wrongSecurityHeaders = useMemo(() => !validateHeaders(securityHeaders), [securityHeaders])
+  const wrongHeaders = useMemo(() => !validateHeadersText(headers), [headers])
+  const wrongSecurityHeaders = useMemo(() => !validateHeadersText(securityHeaders), [securityHeaders])
   const wrongForwardUrl = useMemo(() => !validateForwardUrl(forwardUrl), [forwardUrl])
 
   const saveDisabled = useMemo(
@@ -137,15 +84,17 @@ export const SessionEditor: React.FC<{
 
     try {
       await updateSession(session.sID, {
-        slug: slug.trim() || undefined,
-        group: group.trim() || undefined,
+        // Slug is the identifier: when blank, OMIT it from the patch so the current slug is kept (never wiped).
+        slug: slug.trim() ? slug.trim() : undefined,
+        // group / forwardUrl / responseScript are clearable: send "" when blanked so the server clears them.
+        group: group.trim(),
         statusCode,
-        headers: parsedHeaders.length > 0 ? parsedHeaders : undefined,
+        headers: parsedHeaders,
         delay,
-        responseBody: responseBody.trim().length > 0 ? new TextEncoder().encode(responseBody) : undefined,
-        securityHeaders: parsedSecHeaders.length > 0 ? parsedSecHeaders : undefined,
-        forwardUrl: forwardUrl.trim() || undefined,
-        responseScript: responseScript.trim() || undefined,
+        responseBody: new TextEncoder().encode(responseBody),
+        securityHeaders: parsedSecHeaders,
+        forwardUrl: forwardUrl.trim(),
+        responseScript,
         longLived,
       })
 

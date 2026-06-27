@@ -20,20 +20,20 @@ const HELPER_FUNCS: ReadonlyArray<{ func: string; description: string }> = [
   { func: 'jsonPath', description: 'Extract a value from a JSON string using a dot-path' },
   { func: 'uuid', description: 'Generate a random UUID v4' },
   { func: 'now', description: 'Return the current UTC time' },
-  { func: 'randInt', description: 'Generate a random integer in [0, n)' },
-  { func: 'randHex', description: 'Generate n random hex bytes as a hex string' },
+  { func: 'randInt', description: 'Crypto-random integer in [min, max): randInt min max' },
+  { func: 'randHex', description: 'n random bytes as a hex string (2n chars): randHex n' },
   { func: 'base64', description: 'Base64-encode a string' },
   { func: 'sha256', description: 'SHA-256 hash of a string (hex)' },
-  { func: 'hmacSHA256', description: 'HMAC-SHA-256 of a string with a key (hex)' },
+  { func: 'hmacSHA256', description: 'HMAC-SHA-256 of a message with a key: hmacSHA256 key message (hex)' },
   { func: 'upper', description: 'Convert a string to uppercase' },
   { func: 'lower', description: 'Convert a string to lowercase' },
   { func: 'default', description: 'Return a fallback value when the primary is empty/zero' },
+  { func: 'seq', description: 'Generate a sequence of integers (e.g. for ranges)' },
 ]
 
-const EXAMPLE_SCRIPT = `@status 200
-{{ $id := .JSON.trackingId }}
-{{ $sig := hmacSHA256 $id "my-secret" }}
-{{ json (map "id" $id "sig" $sig "method" .Method) }}`
+const EXAMPLE_SCRIPT = `{{ $id := jsonPath .JSON "trackingId" }}
+@status 200
+{"id":"{{ $id }}","sig":"{{ hmacSHA256 "my-secret" $id }}"}`
 
 /** Popover button that shows the response-script template reference. */
 export const ScriptHelpButton: React.FC = () => {

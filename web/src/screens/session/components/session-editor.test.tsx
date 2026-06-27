@@ -97,6 +97,56 @@ describe('SessionEditor', () => {
     })
   })
 
+  test('clearing the group then saving sends group: "" so the server clears it', async () => {
+    renderEditor()
+
+    // Blank out the pre-filled group
+    fireEvent.change(screen.getByRole('textbox', { name: /group/i }), {
+      target: { value: '' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalledWith('uuid-test', expect.objectContaining({ group: '' }))
+    })
+  })
+
+  test('clearing forward URL and response script sends empty strings (clear)', async () => {
+    renderEditor({
+      ...BASE_SESSION,
+      forwardUrl: 'https://old.example.com/hook',
+      responseScript: '@status 200',
+    })
+
+    fireEvent.change(screen.getByRole('textbox', { name: /forward/i }), { target: { value: '' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /response script/i }), { target: { value: '' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        'uuid-test',
+        expect.objectContaining({ forwardUrl: '', responseScript: '' })
+      )
+    })
+  })
+
+  test('blank slug is OMITTED from the patch (the current slug is kept, not wiped)', async () => {
+    renderEditor()
+
+    fireEvent.change(screen.getByRole('textbox', { name: /slug/i }), { target: { value: '' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalled()
+    })
+
+    const patch = mockUpdateSession.mock.calls[0][1]
+    expect(patch.slug).toBeUndefined()
+  })
+
   test('shows a slug-taken error when updateSession rejects with a 409', async () => {
     const conflictError = Object.assign(new Error('slug already taken'), {
       response: { status: 409 },

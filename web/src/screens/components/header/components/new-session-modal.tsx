@@ -13,9 +13,13 @@ import { useNavigate } from 'react-router-dom'
 import { useStorage, UsedStorageKeys, type StorageArea, useSettings, useData } from '~/shared'
 import { pathTo, RouteIDs } from '~/routing'
 import { ScriptHelpButton } from '~/screens/session/components/script-help'
-
-/** Regex for a valid session slug: starts with [a-z0-9], followed by 1-48 chars of [a-z0-9-] */
-const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{1,48}$/
+import {
+  HEADER_LIMITS,
+  headersTextToHeaders,
+  validateForwardUrl,
+  validateHeadersText,
+  validateSlug,
+} from '~/screens/session/components/session-validation'
 
 /** Controls for the new session modal */
 const controls = {
@@ -29,7 +33,7 @@ const controls = {
   // response headers
   head: {
     def: 'Content-Type: application/json\nServer: WebhookTester',
-    limits: { maxCount: 10, minNameLen: 1, maxNameLen: 40, maxValueLen: 2048 },
+    limits: HEADER_LIMITS,
     key: UsedStorageKeys.NewSessionHeadersList,
     area: 'session' satisfies StorageArea as StorageArea,
   },
@@ -54,50 +58,13 @@ const controls = {
   },
 }
 
-/** Shared header validation limits (reused for security headers). */
-const HEADER_LIMITS = controls.head.limits
-
 /** Validation functions for the controls */
 const validate: { [K in keyof typeof controls]: (v: unknown) => boolean } = {
   code: (v) => typeof v === 'number' && v >= controls.code.limits.min && v <= controls.code.limits.max,
-  head: (v) => {
-    if (typeof v !== 'string') {
-      return false
-    }
-
-    const raw = headersTextToHeaders(v) // convert the text to headers
-
-    return (
-      raw.length <= HEADER_LIMITS.maxCount && // check the count of headers
-      raw.every(
-        (h) =>
-          h.name.length >= HEADER_LIMITS.minNameLen && // check the name length (min)
-          h.name.length <= HEADER_LIMITS.maxNameLen && // check the name length (max)
-          h.value.length <= HEADER_LIMITS.maxValueLen && // check the value length (max)
-          /^[a-zA-Z0-9-]+$/i.test(h.name) &&
-          /^[^\r\n]*$/i.test(h.value) && // check the header name and value format
-          h.name.trim().length > 0 &&
-          h.value.trim().length > 0 // check the header name and value are not empty
-      )
-    )
-  },
+  head: (v) => typeof v === 'string' && validateHeadersText(v),
   delay: (v) => typeof v === 'number' && v >= controls.delay.limits.min && v <= controls.delay.limits.max,
   body: (v) => typeof v === 'string',
   destroy: (v) => typeof v === 'boolean',
-}
-
-/** Validate a slug: empty is OK (server auto-generates); non-empty must match the regex. */
-const validateSlug = (v: string): boolean => v === '' || SLUG_REGEX.test(v)
-
-/** Validate a forward URL: empty is OK; non-empty must be a valid http/https URL. */
-const validateForwardUrl = (v: string): boolean => {
-  if (!v) return true
-  try {
-    const u = new URL(v)
-    return u.protocol === 'http:' || u.protocol === 'https:'
-  } catch {
-    return false
-  }
 }
 
 export const NewSessionModal: React.FC<{
@@ -141,10 +108,7 @@ export const NewSessionModal: React.FC<{
 
   const wrongSlug = useMemo(() => !validateSlug(slug), [slug])
   const wrongForwardUrl = useMemo(() => !validateForwardUrl(forwardUrl), [forwardUrl])
-  const wrongSecurityHeaders = useMemo(() => {
-    if (!securityHeaders.trim()) return false // empty is fine
-    return !validate.head(securityHeaders) // reuse response-header validation
-  }, [securityHeaders])
+  const wrongSecurityHeaders = useMemo(() => !validateHeadersText(securityHeaders), [securityHeaders]) // empty is fine
 
   const createDisabled = useMemo(
     () =>
@@ -425,16 +389,3 @@ export const NewSessionModal: React.FC<{
     </Modal>
   )
 }
-
-/** Convert text to headers */
-const headersTextToHeaders = (text: string): Array<{ name: string; value: string }> =>
-  text
-    .split('\n') // split by each line
-    .map((line) => line.trim()) // trim each line
-    .filter((line) => line.length > 0) // filter out empty lines
-    .map((line) => {
-      const [name, ...valueParts] = line.split(': ')
-      const value = valueParts.join(': ') // join in case of additional colons in value
-
-      return { name: name.trim(), value: value.trim() }
-    })

@@ -204,7 +204,12 @@ export function SessionAndRequestScreen(): React.JSX.Element {
             >
               Edit session settings
             </Button>
-            <SessionEditor session={session} opened={editorOpened} onClose={() => setEditorOpened(false)} />
+            <SessionEditor
+              key={session.sID}
+              session={session}
+              opened={editorOpened}
+              onClose={() => setEditorOpened(false)}
+            />
           </>
         )}
         <Blockquote my="lg" color="blue" icon={<IconInfoCircle />}>
