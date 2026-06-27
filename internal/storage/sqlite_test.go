@@ -2,12 +2,14 @@ package storage_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite" // register the "sqlite" driver for the raw-DB migration test
 
 	"gh.tarampamp.am/webhook-tester/v2/internal/storage"
 )
@@ -290,6 +292,239 @@ func TestSQLite_ListSessionsCounts(t *testing.T) {
 	none, err := s.ListSessions(ctx, storage.SessionFilter{Query: "BET"})
 	require.NoError(t, err)
 	require.Empty(t, none)
+}
+
+// TestSQLite_DenormalizedCounters exercises the full lifecycle of the denormalized
+// sessions.requests_count / sessions.last_request_ms columns: increment on capture, decrement on
+// eviction (clamped at the cap), decrement on single delete, reset on bulk delete, and — critically —
+// that ListSessions reads the stored counters rather than aggregating across the requests table.
+func TestSQLite_DenormalizedCounters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("increment and last_request_ms on capture", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			ctx = context.Background()
+			ft  = newFakeTime(t)
+			s   = newSQLite(t, time.Hour, 0, storage.WithSQLiteTimeNow(ft.Get)) // 0 = unlimited
+		)
+
+		sID, err := s.NewSession(ctx, storage.Session{Slug: "cap0"})
+		require.NoError(t, err)
+
+		var lastMs int64
+
+		for range 5 {
+			ft.Add(time.Millisecond)
+			lastMs = ft.Get().UnixMilli()
+
+			_, rErr := s.NewRequest(ctx, sID, storage.Request{Method: "POST"})
+			require.NoError(t, rErr)
+		}
+
+		got := summaryOf(t, ctx, s, sID)
+		require.Equal(t, 5, got.RequestsCount, "count must equal the number inserted (unlimited)")
+		require.Equal(t, lastMs, got.LastRequestUnixMilli, "last_request_ms must track the newest capture")
+	})
+
+	t.Run("eviction clamps count to the cap", func(t *testing.T) {
+		t.Parallel()
+
+		const cap = 3
+
+		var (
+			ctx = context.Background()
+			ft  = newFakeTime(t)
+			s   = newSQLite(t, time.Hour, cap, storage.WithSQLiteTimeNow(ft.Get))
+		)
+
+		sID, err := s.NewSession(ctx, storage.Session{Slug: "capped"})
+		require.NoError(t, err)
+
+		for range 10 { // insert well beyond the cap so eviction fires repeatedly
+			ft.Add(time.Millisecond)
+
+			_, rErr := s.NewRequest(ctx, sID, storage.Request{Method: "POST"})
+			require.NoError(t, rErr)
+		}
+
+		got := summaryOf(t, ctx, s, sID)
+		require.Equal(t, cap, got.RequestsCount, "count must reflect retained rows (cap), not total inserted")
+
+		// cross-check the denormalized count against the real row count after eviction
+		all, err := s.GetAllRequests(ctx, sID)
+		require.NoError(t, err)
+		require.Len(t, all, cap)
+	})
+
+	t.Run("DeleteRequest decrements, DeleteAllRequests resets", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			ctx = context.Background()
+			ft  = newFakeTime(t)
+			s   = newSQLite(t, time.Hour, 0, storage.WithSQLiteTimeNow(ft.Get))
+		)
+
+		sID, err := s.NewSession(ctx, storage.Session{Slug: "del"})
+		require.NoError(t, err)
+
+		var firstID string
+
+		for i := range 4 {
+			ft.Add(time.Millisecond)
+
+			rID, rErr := s.NewRequest(ctx, sID, storage.Request{Method: "POST"})
+			require.NoError(t, rErr)
+
+			if i == 0 {
+				firstID = rID
+			}
+		}
+
+		require.Equal(t, 4, summaryOf(t, ctx, s, sID).RequestsCount)
+
+		// single delete -> count - 1
+		require.NoError(t, s.DeleteRequest(ctx, sID, firstID))
+		require.Equal(t, 3, summaryOf(t, ctx, s, sID).RequestsCount)
+
+		// bulk delete -> count 0 and last_request_ms reset
+		require.NoError(t, s.DeleteAllRequests(ctx, sID))
+
+		got := summaryOf(t, ctx, s, sID)
+		require.Equal(t, 0, got.RequestsCount)
+		require.Zero(t, got.LastRequestUnixMilli)
+	})
+
+	t.Run("ListSessions reads counters, does not aggregate requests", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			ctx = context.Background()
+			ft  = newFakeTime(t)
+			s   = newSQLite(t, time.Hour, 0, storage.WithSQLiteTimeNow(ft.Get))
+		)
+
+		sID, err := s.NewSession(ctx, storage.Session{Slug: "nojoin"})
+		require.NoError(t, err)
+
+		for range 7 {
+			ft.Add(time.Millisecond)
+
+			_, rErr := s.NewRequest(ctx, sID, storage.Request{Method: "POST"})
+			require.NoError(t, rErr)
+		}
+
+		before := summaryOf(t, ctx, s, sID)
+		require.Equal(t, 7, before.RequestsCount)
+
+		// White-box: delete every requests row directly, bypassing the driver so the denormalized
+		// counters are deliberately left stale. If ListSessions still reports 7 it is reading the
+		// stored column, not COUNT()/MAX() over the requests table (the whole point of this change).
+		_, err = s.DB().ExecContext(ctx, `DELETE FROM requests WHERE session_id = ?`, sID)
+		require.NoError(t, err)
+
+		after := summaryOf(t, ctx, s, sID)
+		require.Equal(t, 7, after.RequestsCount, "ListSessions must read requests_count, not aggregate requests")
+		require.Equal(t, before.LastRequestUnixMilli, after.LastRequestUnixMilli,
+			"ListSessions must read last_request_ms, not MAX(requests.created_at_ms)")
+	})
+}
+
+// summaryOf returns the ListSessions summary for sID (failing the test if it is absent).
+func summaryOf(t *testing.T, ctx context.Context, s *storage.SQLite, sID string) storage.SessionSummary {
+	t.Helper()
+
+	list, err := s.ListSessions(ctx, storage.SessionFilter{})
+	require.NoError(t, err)
+
+	for _, ss := range list {
+		if ss.ID == sID {
+			return ss
+		}
+	}
+
+	t.Fatalf("session %s not found in ListSessions", sID)
+
+	return storage.SessionSummary{}
+}
+
+// TestSQLite_MigrateSessionCounters_BackfillsExistingDB proves the idempotent migration upgrades a
+// pre-existing database (no requests_count / last_request_ms columns): the new columns are added and
+// every session is backfilled once from the requests table, so ListSessions is correct immediately.
+func TestSQLite_MigrateSessionCounters_BackfillsExistingDB(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		dsn = "file:" + filepath.Join(t.TempDir(), "old-counters.db")
+	)
+
+	now := time.Now().UnixMilli()
+
+	{ // build an "old" database WITHOUT requests_count / last_request_ms (and pre-seq / pre-inbound-auth)
+		raw, err := sql.Open("sqlite", dsn)
+		require.NoError(t, err)
+
+		_, err = raw.ExecContext(ctx, `
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY, slug TEXT NOT NULL DEFAULT '', group_name TEXT NOT NULL DEFAULT '',
+  code INTEGER NOT NULL DEFAULT 200, headers_json TEXT NOT NULL DEFAULT '[]', response_body BLOB,
+  delay_millis INTEGER NOT NULL DEFAULT 0, response_script TEXT NOT NULL DEFAULT '',
+  security_headers TEXT NOT NULL DEFAULT '[]', forward_url TEXT NOT NULL DEFAULT '',
+  long_lived INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL);
+CREATE TABLE requests (
+  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, method TEXT NOT NULL, body BLOB,
+  headers_json TEXT NOT NULL DEFAULT '[]', url TEXT NOT NULL, client_addr TEXT NOT NULL, created_at_ms INTEGER NOT NULL);`)
+		require.NoError(t, err)
+
+		// session "busy" has 3 requests (last at now+20); session "idle" has none.
+		for _, sID := range []string{"busy", "idle"} {
+			_, err = raw.ExecContext(ctx,
+				`INSERT INTO sessions (id, slug, created_at_ms, expires_at_ms) VALUES (?,?,?,?)`,
+				sID, sID, now, now+3_600_000)
+			require.NoError(t, err)
+		}
+
+		const insReq = `INSERT INTO requests (id, session_id, method, url, client_addr, created_at_ms) VALUES (?,?,?,?,?,?)`
+		for i, ms := range []int64{now, now + 10, now + 20} {
+			_, err = raw.ExecContext(ctx, insReq,
+				"r"+string(rune('1'+i)), "busy", "GET", "/x", "1.1.1.1", ms)
+			require.NoError(t, err)
+		}
+
+		require.NoError(t, raw.Close())
+	}
+
+	// open with the real driver -> migrations run, counters backfilled once
+	s, err := storage.NewSQLite(ctx, dsn, time.Hour, 100)
+	require.NoError(t, err)
+
+	defer func() { _ = s.Close() }()
+
+	list, err := s.ListSessions(ctx, storage.SessionFilter{})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+
+	got := map[string]storage.SessionSummary{}
+	for _, ss := range list {
+		got[ss.ID] = ss
+	}
+
+	require.Equal(t, 3, got["busy"].RequestsCount, "backfill must count existing rows")
+	require.Equal(t, now+20, got["busy"].LastRequestUnixMilli, "backfill must set MAX(created_at_ms)")
+	require.Equal(t, 0, got["idle"].RequestsCount)
+	require.Zero(t, got["idle"].LastRequestUnixMilli)
+
+	// counters stay correct for new captures after the migration
+	_, err = s.NewRequest(ctx, "idle", storage.Request{Method: "POST"})
+	require.NoError(t, err)
+
+	list, err = s.ListSessions(ctx, storage.SessionFilter{Query: "idle"})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, 1, list[0].RequestsCount)
 }
 
 func TestSQLite_SlugLookupAndConflict(t *testing.T) {

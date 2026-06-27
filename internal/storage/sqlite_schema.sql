@@ -23,7 +23,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at_ms    INTEGER NOT NULL,
   expires_at_ms    INTEGER NOT NULL,                -- ignored when long_lived = 1
   inbound_auth_header TEXT NOT NULL DEFAULT '',     -- inbound-auth header name ('' = public, no inbound auth)
-  inbound_auth_value  TEXT NOT NULL DEFAULT ''      -- expected inbound-auth header value (secret)
+  inbound_auth_value  TEXT NOT NULL DEFAULT '',     -- expected inbound-auth header value (secret)
+  -- Denormalized per-session activity counters, maintained transactionally by NewRequest /
+  -- evictOldRequests / DeleteRequest / DeleteAllRequests so ListSessions is O(sessions) and never
+  -- aggregates across the (potentially huge) requests table. Backfilled once by migrateSessionCounters.
+  requests_count   INTEGER NOT NULL DEFAULT 0,      -- number of stored requests for this session
+  last_request_ms  INTEGER NOT NULL DEFAULT 0       -- created_at_ms of the newest stored request (0 = none)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_group ON sessions(group_name);

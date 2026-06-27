@@ -125,20 +125,12 @@ func NewSQLite(
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
-	// Idempotent migration so a pre-existing database (created before the seq column /
-	// counters table) gets the durable FIFO sequence wired up safely.
-	if err = migrateRequestSeq(ctx, db); err != nil {
+	// Idempotent migrations so a pre-existing database is upgraded safely. Each is a no-op on a
+	// fresh database (the embedded schema already includes the columns) and on every startup.
+	if err = runSQLiteMigrations(ctx, db); err != nil {
 		_ = db.Close()
 
-		return nil, fmt.Errorf("migrate request seq: %w", err)
-	}
-
-	// Idempotent migration so a pre-existing database (created before the inbound-auth feature)
-	// gains the sessions.inbound_auth_* and requests.authorized columns safely.
-	if err = migrateInboundAuth(ctx, db); err != nil {
-		_ = db.Close()
-
-		return nil, fmt.Errorf("migrate inbound auth: %w", err)
+		return nil, err
 	}
 
 	var s = SQLite{
@@ -465,6 +457,15 @@ func (s *SQLite) NewRequest(ctx context.Context, sID string, r Request) (string,
 		return "", err
 	}
 
+	// Maintain the denormalized session counters inside the same transaction: bump the count and
+	// advance last_request_ms (MAX guards against an out-of-order/older capture timestamp).
+	const updCounters = `UPDATE sessions SET requests_count = requests_count + 1, ` +
+		`last_request_ms = MAX(last_request_ms, ?) WHERE id = ?`
+
+	if _, err = tx.ExecContext(ctx, updCounters, r.CreatedAtUnixMilli, sID); err != nil {
+		return "", fmt.Errorf("bump session counters: %w", err)
+	}
+
 	if err = s.evictOldRequests(ctx, tx, sID); err != nil {
 		return "", err
 	}
@@ -508,8 +509,17 @@ func (s *SQLite) evictOldRequests(ctx context.Context, tx *sql.Tx, sID string) e
 	const q = `DELETE FROM requests WHERE session_id = ? AND id NOT IN (` +
 		`SELECT id FROM requests WHERE session_id = ? ORDER BY created_at_ms DESC, id DESC LIMIT ?)`
 
-	if _, err := tx.ExecContext(ctx, q, sID, sID, s.maxRequests); err != nil {
+	res, err := tx.ExecContext(ctx, q, sID, sID, s.maxRequests)
+	if err != nil {
 		return fmt.Errorf("evict old requests: %w", err)
+	}
+
+	// Keep the denormalized count in step with the rows actually evicted (clamped at >= 0).
+	if n, _ := res.RowsAffected(); n > 0 {
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE sessions SET requests_count = MAX(requests_count - ?, 0) WHERE id = ?`, n, sID); err != nil {
+			return fmt.Errorf("decrement session count after eviction: %w", err)
+		}
 	}
 
 	return nil
@@ -673,13 +683,31 @@ func (s *SQLite) DeleteRequest(ctx context.Context, sID, rID string) error {
 		return err
 	}
 
-	res, err := s.db.ExecContext(ctx, `DELETE FROM requests WHERE id = ? AND session_id = ?`, rID, sID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM requests WHERE id = ? AND session_id = ?`, rID, sID)
 	if err != nil {
 		return fmt.Errorf("delete request: %w", err)
 	}
 
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrRequestNotFound
+	}
+
+	// Decrement the denormalized count (clamped at >= 0). last_request_ms is intentionally left
+	// as-is: a slightly stale last-activity after deleting the very newest request is acceptable
+	// and avoids an O(n) MAX recompute on every delete.
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE sessions SET requests_count = MAX(requests_count - 1, 0) WHERE id = ?`, sID); err != nil {
+		return fmt.Errorf("decrement session count: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete request: %w", err)
 	}
 
 	return nil
@@ -694,8 +722,24 @@ func (s *SQLite) DeleteAllRequests(ctx context.Context, sID string) error {
 		return err
 	}
 
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM requests WHERE session_id = ?`, sID); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	if _, err = tx.ExecContext(ctx, `DELETE FROM requests WHERE session_id = ?`, sID); err != nil {
 		return fmt.Errorf("delete all requests: %w", err)
+	}
+
+	// All rows for the session are gone, so the denormalized counters reset to zero.
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE sessions SET requests_count = 0, last_request_ms = 0 WHERE id = ?`, sID); err != nil {
+		return fmt.Errorf("reset session counters: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete all requests: %w", err)
 	}
 
 	return nil
@@ -721,12 +765,15 @@ func (s *SQLite) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSu
 		args = append(args, f.Query, f.Query, f.Query)
 	}
 
+	// Read the denormalized counters straight off the sessions table: O(sessions), no join to (and
+	// no aggregation across) the requests table. requests_count / last_request_ms are maintained
+	// transactionally by NewRequest / evictOldRequests / DeleteRequest / DeleteAllRequests.
 	//nolint:gosec // G202: only constant SQL fragments are concatenated; values are parameterized
 	var q = `SELECT s.id, s.slug, s.group_name, s.code, s.created_at_ms, s.expires_at_ms, s.long_lived, ` +
-		`COUNT(r.id), COALESCE(MAX(r.created_at_ms), 0) ` +
-		`FROM sessions s LEFT JOIN requests r ON r.session_id = s.id ` +
+		`s.requests_count, s.last_request_ms ` +
+		`FROM sessions s ` +
 		`WHERE ` + strings.Join(conds, " AND ") +
-		` GROUP BY s.id ORDER BY s.created_at_ms DESC`
+		` ORDER BY s.created_at_ms DESC`
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -1102,6 +1149,29 @@ func nextSQLiteRequestSeq(ctx context.Context, tx *sql.Tx) (int64, error) {
 	return seq, nil
 }
 
+// runSQLiteMigrations applies every idempotent startup migration in order. Each migration adds any
+// columns/indexes a pre-existing database is missing (guarded by PRAGMA table_info) and backfills
+// where needed, so it is safe to run on a fresh database and on every open.
+func runSQLiteMigrations(ctx context.Context, db *sql.DB) error {
+	// Durable FIFO sequence (requests.seq + counters); created before the inbound-auth feature.
+	if err := migrateRequestSeq(ctx, db); err != nil {
+		return fmt.Errorf("migrate request seq: %w", err)
+	}
+
+	// sessions.inbound_auth_* and requests.authorized columns.
+	if err := migrateInboundAuth(ctx, db); err != nil {
+		return fmt.Errorf("migrate inbound auth: %w", err)
+	}
+
+	// Denormalized sessions.requests_count / sessions.last_request_ms (backfilled once) so
+	// ListSessions reads them directly instead of aggregating across the whole requests table.
+	if err := migrateSessionCounters(ctx, db); err != nil {
+		return fmt.Errorf("migrate session counters: %w", err)
+	}
+
+	return nil
+}
+
 // migrateRequestSeq idempotently upgrades a database to the durable FIFO sequence: it adds
 // the requests.seq column (backfilling existing rows in capture order so older requests get
 // lower seqs), creates the (session_id, seq) index, and seeds the request_seq counter above
@@ -1196,6 +1266,53 @@ func migrateInboundAuth(ctx context.Context, db *sql.DB) error {
 		if _, err = db.ExecContext(ctx, m.ddl); err != nil {
 			return fmt.Errorf("add %s.%s column: %w", m.table, m.column, err)
 		}
+	}
+
+	return nil
+}
+
+// migrateSessionCounters idempotently adds the denormalized activity counters to a pre-existing
+// database: sessions.requests_count and sessions.last_request_ms (both default 0). When it adds at
+// least one of the columns it backfills every existing session ONCE from the requests table, so the
+// counters are correct for data captured before this feature existed. It is safe to run on a fresh
+// database (the columns already exist via the embedded schema, so each ALTER is skipped and the
+// one-time backfill does not run) and on every startup. The backfill aggregation is the only place
+// ListSessions' old O(total requests) cost survives, and it is paid exactly once.
+func migrateSessionCounters(ctx context.Context, db *sql.DB) error {
+	var migrations = []struct{ column, ddl string }{
+		{"requests_count", `ALTER TABLE sessions ADD COLUMN requests_count INTEGER NOT NULL DEFAULT 0`},
+		{"last_request_ms", `ALTER TABLE sessions ADD COLUMN last_request_ms INTEGER NOT NULL DEFAULT 0`},
+	}
+
+	var added bool
+
+	for _, m := range migrations {
+		has, err := tableHasColumn(ctx, db, "sessions", m.column)
+		if err != nil {
+			return err
+		}
+
+		if has {
+			continue
+		}
+
+		if _, err = db.ExecContext(ctx, m.ddl); err != nil {
+			return fmt.Errorf("add sessions.%s column: %w", m.column, err)
+		}
+
+		added = true
+	}
+
+	if !added {
+		return nil
+	}
+
+	const backfill = `UPDATE sessions SET
+		requests_count = (SELECT COUNT(*) FROM requests WHERE requests.session_id = sessions.id),
+		last_request_ms = (SELECT COALESCE(MAX(created_at_ms), 0) FROM requests WHERE requests.session_id = sessions.id)`
+
+	if _, err := db.ExecContext(ctx, backfill); err != nil {
+		return fmt.Errorf("backfill session counters: %w", err)
 	}
 
 	return nil
