@@ -716,6 +716,47 @@ func (s *FS) ListRequestsAfter(ctx context.Context, sID string, afterSeq int64, 
 	return out, nil
 }
 
+// ListRequestsPage returns the session's requests with Seq < beforeSeq (or the newest page when
+// beforeSeq <= 0), sorted by Seq descending (NEWEST first), capped at limit. It reuses
+// GetAllRequests (which handles session existence and expiry) and filters/sorts by the persisted
+// seq. It backs the cursor-paginated requests-list API. Note: the fs seq counter is in-process and
+// resets on restart, so a cursor is only durable within a single process run — use SQLite otherwise.
+func (s *FS) ListRequestsPage(ctx context.Context, sID string, beforeSeq int64, limit int) ([]Request, error) {
+	all, err := s.GetAllRequests(ctx, sID)
+	if err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var out = make([]Request, 0, len(all))
+
+	for _, req := range all {
+		if beforeSeq <= 0 || req.Seq < beforeSeq {
+			out = append(out, req)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b Request) int {
+		switch {
+		case a.Seq > b.Seq: // newest first
+			return -1
+		case a.Seq < b.Seq:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
 func (s *FS) DeleteRequest(ctx context.Context, sID, rID string) error {
 	if err := s.isOpenAndNotDone(ctx); err != nil {
 		return err

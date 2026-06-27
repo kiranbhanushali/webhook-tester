@@ -610,6 +610,60 @@ func (s *SQLite) ListRequestsAfter(ctx context.Context, sID string, afterSeq int
 	return out, nil
 }
 
+// ListRequestsPage returns the session's requests with seq < beforeSeq (or the newest page when
+// beforeSeq <= 0), ordered by seq DESC (newest first), capped at limit. It backs the cursor-
+// paginated requests-list API and uses the (session_id, seq) index.
+func (s *SQLite) ListRequestsPage(ctx context.Context, sID string, beforeSeq int64, limit int) ([]Request, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := s.ensureSessionExists(ctx, sID); err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+
+	if beforeSeq > 0 {
+		const q = `SELECT ` + requestCols + ` FROM requests WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`
+
+		rows, err = s.db.QueryContext(ctx, q, sID, beforeSeq, limit)
+	} else {
+		const q = `SELECT ` + requestCols + ` FROM requests WHERE session_id = ? ORDER BY seq DESC LIMIT ?`
+
+		rows, err = s.db.QueryContext(ctx, q, sID, limit)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("list requests page: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Request
+
+	for rows.Next() {
+		_, req, sErr := scanRequest(rows)
+		if sErr != nil {
+			return nil, sErr
+		}
+
+		out = append(out, *req)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate requests: %w", err)
+	}
+
+	return out, nil
+}
+
 func (s *SQLite) DeleteRequest(ctx context.Context, sID, rID string) error {
 	if err := s.isOpenAndNotDone(ctx); err != nil {
 		return err

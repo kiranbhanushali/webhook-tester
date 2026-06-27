@@ -396,6 +396,46 @@ func (s *InMemory) ListRequestsAfter(ctx context.Context, sID string, afterSeq i
 	return out, nil
 }
 
+// ListRequestsPage returns the session's requests with Seq < beforeSeq (or the newest page when
+// beforeSeq <= 0), sorted by Seq descending (NEWEST first), capped at limit. It backs the cursor-
+// paginated requests-list API.
+func (s *InMemory) ListRequestsPage(ctx context.Context, sID string, beforeSeq int64, limit int) ([]Request, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if !s.isSessionExists(sID) {
+		return nil, ErrSessionNotFound // session not found
+	}
+
+	session, sessionOk := s.sessions.Load(sID)
+	if !sessionOk {
+		return nil, ErrSessionNotFound // like a fuse, because we already checked it
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var out []Request
+
+	session.requests.Range(func(_ string, req Request) bool {
+		if beforeSeq <= 0 || req.Seq < beforeSeq {
+			out = append(out, req)
+		}
+
+		return true
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq > out[j].Seq }) // newest first
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
 func (s *InMemory) DeleteRequest(ctx context.Context, sID, rID string) error {
 	if err := s.isOpenAndNotDone(ctx); err != nil {
 		return err

@@ -88,6 +88,16 @@ type Storage interface {
 	// If the session is not found, ErrSessionNotFound is returned. Drivers without a
 	// durable monotonic sequence (Redis) return ErrSearchUnsupported.
 	ListRequestsAfter(_ context.Context, sID string, afterSeq int64, limit int) ([]Request, error)
+
+	// ListRequestsPage returns the session's captured requests with Seq strictly less than
+	// beforeSeq, ordered by Seq descending (NEWEST first), capped at limit (a non-positive
+	// limit applies defaultListLimit). When beforeSeq is non-positive the newest page is
+	// returned (no upper bound). Each returned Request has its output-only ID and Seq
+	// populated so callers can page backwards through history with no skips/duplicates: use
+	// the Seq of the last (oldest) returned request as the next beforeSeq. It backs the
+	// cursor-paginated requests-list API. If the session is not found, ErrSessionNotFound is
+	// returned. Drivers without a durable monotonic sequence (Redis) return ErrSearchUnsupported.
+	ListRequestsPage(_ context.Context, sID string, beforeSeq int64, limit int) ([]Request, error)
 }
 
 // defaultListLimit caps ListRequestsAfter results when the caller passes a non-positive limit.

@@ -570,3 +570,11 @@ func (s *Redis) SearchRequests(_ context.Context, _ IdentifierQuery) ([]RequestM
 func (s *Redis) ListRequestsAfter(_ context.Context, _ string, _ int64, _ int) ([]Request, error) {
 	return nil, ErrSearchUnsupported
 }
+
+// ListRequestsPage is not supported by the Redis driver for the same reason as ListRequestsAfter:
+// it has no durable, never-reused monotonic sequence to anchor a stable cursor. Use the SQLite
+// driver — the documented default — for the cursor-paginated requests-list API. Returns
+// ErrSearchUnsupported.
+func (s *Redis) ListRequestsPage(_ context.Context, _ string, _ int64, _ int) ([]Request, error) {
+	return nil, ErrSearchUnsupported
+}

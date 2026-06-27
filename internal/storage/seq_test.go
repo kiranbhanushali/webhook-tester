@@ -209,6 +209,180 @@ func TestRedis_ListRequestsAfter_Unsupported(t *testing.T) {
 	require.ErrorIs(t, err, storage.ErrSearchUnsupported)
 }
 
+// testListRequestsPage exercises the cursor-paginated, NEWEST-first requests-list contract
+// (ListRequestsPage). It runs for every driver that supports a monotonic sequence (sqlite,
+// inmemory, fs).
+func testListRequestsPage(
+	t *testing.T,
+	newImpl func(sessionTTL time.Duration, maxRequests uint32) storage.Storage,
+	sleep func(time.Duration),
+) {
+	t.Helper()
+
+	var ctx = context.Background()
+
+	t.Run("newest-first, before cursor, limit, full paging", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 100)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		sID, err := impl.NewSession(ctx, storage.Session{})
+		require.NoError(t, err)
+
+		const n = 5
+		for i := range n {
+			_, rErr := impl.NewRequest(ctx, sID, storage.Request{Method: "POST", Body: []byte{byte('a' + i)}})
+			require.NoError(t, rErr)
+
+			sleep(time.Millisecond) // distinct, ordered capture timestamps
+		}
+
+		// beforeSeq<=0 => the NEWEST page. limit=2 => the two newest, descending seq.
+		page1, err := impl.ListRequestsPage(ctx, sID, 0, 2)
+		require.NoError(t, err)
+		require.Len(t, page1, 2)
+		require.Greater(t, page1[0].Seq, page1[1].Seq) // newest first
+		require.NotEmpty(t, page1[0].ID, "request ID must be populated on read")
+		require.Equal(t, []byte{'e'}, page1[0].Body) // newest
+		require.Equal(t, []byte{'d'}, page1[1].Body)
+
+		// page 2: before = seq of the last (oldest) item of page1 -> the next two older, no overlap
+		page2, err := impl.ListRequestsPage(ctx, sID, page1[1].Seq, 2)
+		require.NoError(t, err)
+		require.Len(t, page2, 2)
+		require.Less(t, page2[0].Seq, page1[1].Seq)
+		require.Equal(t, []byte{'c'}, page2[0].Body)
+		require.Equal(t, []byte{'b'}, page2[1].Body)
+
+		// page 3: the remainder
+		page3, err := impl.ListRequestsPage(ctx, sID, page2[1].Seq, 2)
+		require.NoError(t, err)
+		require.Len(t, page3, 1)
+		require.Equal(t, []byte{'a'}, page3[0].Body)
+
+		// beyond the end -> empty (no skip, no duplicate)
+		page4, err := impl.ListRequestsPage(ctx, sID, page3[0].Seq, 2)
+		require.NoError(t, err)
+		require.Empty(t, page4)
+
+		// walk every page and assert each request is returned exactly once, strictly descending
+		var (
+			seen   = make(map[string]int)
+			before int64 // 0 = newest
+			total  int
+		)
+
+		for {
+			pg, pErr := impl.ListRequestsPage(ctx, sID, before, 2)
+			require.NoError(t, pErr)
+
+			if len(pg) == 0 {
+				break
+			}
+
+			for i, r := range pg {
+				if i > 0 {
+					require.Less(t, r.Seq, pg[i-1].Seq) // descending within a page
+				}
+
+				seen[r.ID]++
+				total++
+			}
+
+			before = pg[len(pg)-1].Seq
+		}
+
+		require.Equal(t, n, total, "every request returned exactly once across pages (no gaps/dupes)")
+		require.Len(t, seen, n)
+
+		for id, c := range seen {
+			require.Equalf(t, 1, c, "request %s returned more than once", id)
+		}
+
+		// a large limit returns everything newest-first
+		all, err := impl.ListRequestsPage(ctx, sID, 0, 1000)
+		require.NoError(t, err)
+		require.Len(t, all, n)
+
+		for i := 1; i < len(all); i++ {
+			require.Less(t, all[i].Seq, all[i-1].Seq)
+		}
+
+		// limit is respected (and points at the newest)
+		one, err := impl.ListRequestsPage(ctx, sID, 0, 1)
+		require.NoError(t, err)
+		require.Len(t, one, 1)
+		require.Equal(t, []byte{'e'}, one[0].Body)
+	})
+
+	t.Run("session not found", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = newImpl(time.Minute, 100)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		_, err := impl.ListRequestsPage(ctx, "missing", 0, 10)
+		require.ErrorIs(t, err, storage.ErrSessionNotFound)
+	})
+}
+
+func TestInMemory_ListRequestsPage(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testListRequestsPage(t,
+		func(sTTL time.Duration, maxReq uint32) storage.Storage {
+			return storage.NewInMemory(sTTL, maxReq, storage.WithInMemoryTimeNow(ft.Get))
+		},
+		func(d time.Duration) { ft.Add(d) },
+	)
+}
+
+func TestFS_ListRequestsPage(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testListRequestsPage(t,
+		func(sTTL time.Duration, maxReq uint32) storage.Storage {
+			return storage.NewFS(t.TempDir(), sTTL, maxReq, storage.WithFSTimeNow(ft.Get))
+		},
+		func(d time.Duration) { ft.Add(d) },
+	)
+}
+
+func TestSQLite_ListRequestsPage(t *testing.T) {
+	t.Parallel()
+
+	var ft = newFakeTime(t)
+
+	testListRequestsPage(t,
+		func(sTTL time.Duration, maxReq uint32) storage.Storage {
+			dsn := "file:" + filepath.Join(t.TempDir(), "page.db")
+
+			impl, err := storage.NewSQLite(context.Background(), dsn, sTTL, maxReq, storage.WithSQLiteTimeNow(ft.Get))
+			require.NoError(t, err)
+
+			return impl
+		},
+		func(d time.Duration) { ft.Add(d) },
+	)
+}
+
+// TestRedis_ListRequestsPage_Unsupported documents that the Redis driver has no durable
+// sequence and reports ListRequestsPage as unsupported (consistent with ListRequestsAfter).
+func TestRedis_ListRequestsPage_Unsupported(t *testing.T) {
+	t.Parallel()
+
+	// nil client is fine: the method must short-circuit before touching it.
+	s := storage.NewRedis(nil, time.Minute, 100)
+
+	_, err := s.ListRequestsPage(context.Background(), "any", 0, 10)
+	require.ErrorIs(t, err, storage.ErrSearchUnsupported)
+}
+
 // TestSQLite_RequestSeq_DurableAcrossReopen proves the durable counter survives a full
 // process restart (close + reopen of the same database file): a consumer's stored cursor
 // never silently rewinds.
