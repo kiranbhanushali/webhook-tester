@@ -4,7 +4,13 @@ import { base64ToUint8Array, uint8ArrayToBase64 } from '~/shared'
 import { createAuthMiddleware, getStoredToken, type TokenProvider } from './auth'
 import { APIErrorUnknown } from './errors'
 import { throwIfNotJSON, throwIfNotValidResponse } from './middleware'
-import { components, paths, PathsApiSearchGetParametersQueryMatch, type RequestEventAction } from './schema.gen'
+import {
+  components,
+  FirehoseEventAction,
+  paths,
+  PathsApiSearchGetParametersQueryMatch,
+  type RequestEventAction,
+} from './schema.gen'
 
 /** A single name/value header pair. */
 type Header = Readonly<{ name: string; value: string }>
@@ -177,6 +183,20 @@ export type FirehoseEvent = Readonly<{
     /** False when the request was rejected by inbound auth (it is still captured). */
     authorized: boolean
   }> | null
+}>
+
+/**
+ * A page of recent captured requests across sessions (newest first) with a cursor for the next
+ * (older) page. Items are normalized to {@link FirehoseEvent} so the dashboard can render and merge
+ * them with the live firehose feed uniformly (the body/headers are fetched on click, like firehose
+ * rows). Used to backfill recent history on load and to infinite-scroll older events.
+ */
+export type RecentEventsPage = Readonly<{
+  items: ReadonlyArray<FirehoseEvent>
+  /** Pass as `before` to fetch the next (older) page; the seq of the oldest item returned. */
+  nextBefore: number
+  /** True when more (older) events remain to be loaded. */
+  hasMore: boolean
 }>
 
 export class Client {
@@ -778,6 +798,65 @@ export class Client {
             )
             // sort the page by capturedAt date, to have the latest requests first
             .sort((a, b) => b.capturedAt.getTime() - a.capturedAt.getTime())
+        ),
+        nextBefore: data.next_before,
+        hasMore: data.has_more,
+      })
+    }
+
+    throw new APIErrorUnknown({ message: response.statusText, response })
+  }
+
+  /**
+   * Returns a page of the most-recently captured requests across ALL sessions (the unified dashboard
+   * feed), NEWEST first. Optionally narrows to a single `session` (UUID or slug) and/or a `group`.
+   *
+   * Omit `before` (or pass 0) to fetch the newest page (recent backfill); then pass the returned
+   * `nextBefore` as `before` on each subsequent call to fetch the next (older) page. `hasMore` is true
+   * while older events remain. Items are normalized to {@link FirehoseEvent} so they merge cleanly with
+   * the live firehose stream.
+   *
+   * @throws {APIError}
+   */
+  async getRecentEvents(opts?: {
+    before?: number
+    limit?: number
+    session?: string
+    group?: string
+  }): Promise<RecentEventsPage> {
+    const query: { before: number; limit: number; session?: string; group?: string } = {
+      before: opts?.before ?? 0,
+      limit: opts?.limit ?? 50,
+    }
+
+    if (opts?.session) {
+      query.session = opts.session
+    }
+
+    if (opts?.group) {
+      query.group = opts.group
+    }
+
+    const { data, response } = await this.api.GET('/api/events', { params: { query } })
+
+    if (data) {
+      return Object.freeze({
+        items: Object.freeze(
+          Array.from(data.items).map((it) =>
+            Object.freeze({
+              sessionUUID: it.session_uuid,
+              sessionSlug: it.session_slug,
+              action: FirehoseEventAction.create,
+              request: Object.freeze({
+                uuid: it.uuid,
+                clientAddress: it.client_address,
+                method: it.method,
+                url: Object.freeze(new URL(it.url)),
+                capturedAt: Object.freeze(new Date(it.captured_at_unix_milli)),
+                authorized: it.authorized,
+              }),
+            })
+          )
         ),
         nextBefore: data.next_before,
         hasMore: data.has_more,

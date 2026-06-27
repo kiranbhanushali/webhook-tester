@@ -12,17 +12,25 @@ type FirehoseListeners = {
   onError?: (err: Error) => void
 }
 
+type RecentEventsPage = { items: ReadonlyArray<FirehoseEvent>; nextBefore: number; hasMore: boolean }
+
 // Hoisted mocks so the vi.mock factory can reference them; fhRef captures the firehose listeners so a
 // test can push events through the SAME boundary the dashboard subscribed to (no real socket).
-const { mockListAllSessions, mockSubscribeFirehose, mockSwitchToSession, mockSwitchToRequest, fhRef } = vi.hoisted(
-  () => ({
-    mockListAllSessions: vi.fn<() => Promise<ReadonlyArray<SessionSummary>>>(),
-    mockSubscribeFirehose: vi.fn<(l: FirehoseListeners) => Promise<() => void>>(),
-    mockSwitchToSession: vi.fn<(sID: string) => Promise<() => Promise<void>>>(),
-    mockSwitchToRequest: vi.fn<(sID: string, rID: string | null) => Promise<() => Promise<void>>>(),
-    fhRef: { current: null as FirehoseListeners | null },
-  })
-)
+const {
+  mockListAllSessions,
+  mockSubscribeFirehose,
+  mockSwitchToSession,
+  mockSwitchToRequest,
+  mockGetRecentEvents,
+  fhRef,
+} = vi.hoisted(() => ({
+  mockListAllSessions: vi.fn<() => Promise<ReadonlyArray<SessionSummary>>>(),
+  mockSubscribeFirehose: vi.fn<(l: FirehoseListeners) => Promise<() => void>>(),
+  mockSwitchToSession: vi.fn<(sID: string) => Promise<() => Promise<void>>>(),
+  mockSwitchToRequest: vi.fn<(sID: string, rID: string | null) => Promise<() => Promise<void>>>(),
+  mockGetRecentEvents: vi.fn<(opts?: { session?: string; group?: string; before?: number }) => Promise<RecentEventsPage>>(),
+  fhRef: { current: null as FirehoseListeners | null },
+}))
 
 vi.mock('~/shared', async (importOriginal) => {
   const mod = await importOriginal<typeof import('~/shared')>()
@@ -33,6 +41,7 @@ vi.mock('~/shared', async (importOriginal) => {
       subscribeFirehose: mockSubscribeFirehose,
       switchToSession: mockSwitchToSession,
       switchToRequest: mockSwitchToRequest,
+      getRecentEvents: mockGetRecentEvents,
     }),
   }
 })
@@ -128,6 +137,8 @@ describe('DashboardScreen', () => {
     })
     mockSwitchToSession.mockResolvedValue(() => Promise.resolve())
     mockSwitchToRequest.mockResolvedValue(() => Promise.resolve())
+    // recent backfill is empty by default; individual tests override as needed
+    mockGetRecentEvents.mockResolvedValue({ items: [], nextBefore: 0, hasMore: false })
   })
 
   afterEach(() => {
@@ -145,8 +156,9 @@ describe('DashboardScreen', () => {
     expect(screen.getByText('session-beta')).toBeInTheDocument()
     expect(screen.getByText('All endpoints')).toBeInTheDocument()
 
-    // empty stream + live indicator (onConnected fired)
-    expect(screen.getByText(/waiting for incoming webhooks/i)).toBeInTheDocument()
+    // recent backfill ran (empty here), then the empty-stream prompt + live indicator (onConnected fired)
+    await waitFor(() => expect(mockGetRecentEvents).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText(/waiting for incoming webhooks/i)).toBeInTheDocument())
     await waitFor(() => expect(screen.getByText('Live')).toBeInTheDocument())
   })
 
@@ -167,22 +179,24 @@ describe('DashboardScreen', () => {
     expect(screen.getAllByText('session-alpha').length).toBeGreaterThan(1)
   })
 
-  test('clicking a session in the rail filters the stream to that session', async () => {
+  test('selecting a session in the rail refetches the backfill and filters live events to it', async () => {
     renderScreen()
 
-    await waitFor(() => expect(screen.getByText('session-alpha')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('session-beta')).toBeInTheDocument())
 
-    pushEvent(makeEvent({ sessionUUID: 'uuid-alpha', sessionSlug: 'session-alpha', rID: 'req-a', method: 'POST' }))
-    pushEvent(makeEvent({ sessionUUID: 'uuid-beta', sessionSlug: 'session-beta', rID: 'req-b', method: 'GET' }))
-
-    await waitFor(() => expect(screen.getByText('POST')).toBeInTheDocument())
-    expect(screen.getByText('GET')).toBeInTheDocument()
-
-    // filter to session-beta
+    // filter to session-beta: triggers a fresh backfill scoped to that session (empty here)
     fireEvent.click(screen.getByRole('button', { name: /filter stream to session-beta/i }))
 
-    await waitFor(() => expect(screen.queryByText('POST')).not.toBeInTheDocument())
-    expect(screen.getByText('GET')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(mockGetRecentEvents).toHaveBeenCalledWith(expect.objectContaining({ session: 'uuid-beta' }))
+    )
+
+    // under the beta filter, a beta live event shows and an alpha live event is filtered out
+    pushEvent(makeEvent({ sessionUUID: 'uuid-beta', sessionSlug: 'session-beta', rID: 'req-b', method: 'GET' }))
+    pushEvent(makeEvent({ sessionUUID: 'uuid-alpha', sessionSlug: 'session-alpha', rID: 'req-a', method: 'POST' }))
+
+    await waitFor(() => expect(screen.getByText('GET')).toBeInTheDocument())
+    expect(screen.queryByText('POST')).not.toBeInTheDocument()
   })
 
   test('clicking a stream row triggers the detail fetch (switchToSession + switchToRequest)', async () => {

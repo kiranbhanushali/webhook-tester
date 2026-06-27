@@ -1,3 +1,11 @@
+/* Bounds the event list to the viewport so infinite-scroll happens INSIDE this container (the sentinel
+   is only intersected at the real bottom). An unbounded list would grow the page and keep the sentinel
+   on screen → runaway pagination (#185). */
+.scroll {
+  height: calc(100vh - 16rem);
+  min-height: 14rem;
+}
+
 .row {
   display: block;
   width: 100%;

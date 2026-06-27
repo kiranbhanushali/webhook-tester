@@ -3,6 +3,7 @@ import {
   APIErrorNotFound,
   type Client,
   type FirehoseEvent,
+  type RecentEventsPage,
   RequestEventAction,
   type ReplayResult,
   type SearchResultItem,
@@ -184,6 +185,18 @@ type DataContext = {
     onError?: (err: Error) => void
   }): Promise<() => void>
 
+  /**
+   * Fetch a page of the most-recently captured requests across ALL sessions (newest first), optionally
+   * narrowed to a single session (uuid or slug) and/or group. Backs the dashboard's recent backfill on
+   * load and its infinite-scroll into older history (pass the previous page's nextBefore as before).
+   */
+  getRecentEvents(opts?: {
+    before?: number
+    limit?: number
+    session?: string
+    group?: string
+  }): Promise<RecentEventsPage>
+
   /** The URL for the webhook (if session is active) */
   readonly webHookUrl: Readonly<URL> | null
 }
@@ -212,6 +225,7 @@ const dataContext = createContext<DataContext>({
   updateSession: () => notInitialized(),
   replayRequest: () => notInitialized(),
   subscribeFirehose: () => notInitialized(),
+  getRecentEvents: () => notInitialized(),
   webHookUrl: null,
 })
 
@@ -1022,6 +1036,9 @@ export const DataProvider: React.FC<{
     [api]
   )
 
+  /** Fetch a page of recent captured requests across sessions (newest first; optional session/group filter). */
+  const getRecentEvents = useCallback<DataContext['getRecentEvents']>((opts) => api.getRecentEvents(opts), [api])
+
   // on provider mount
   useEffect(() => {
     // load all session IDs from the database
@@ -1091,6 +1108,7 @@ export const DataProvider: React.FC<{
         updateSession,
         replayRequest,
         subscribeFirehose,
+        getRecentEvents,
         webHookUrl,
         setRequestsCount,
       }}

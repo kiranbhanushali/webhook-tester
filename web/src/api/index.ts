@@ -7,6 +7,7 @@ export {
   type SearchMatch,
   type FirehoseEvent,
   type CapturedRequestsPage,
+  type RecentEventsPage,
 } from './client'
 export {
   type APIError,

@@ -69,3 +69,61 @@ export const prependCapped = <T>(prev: ReadonlyArray<T>, batchOldestFirst: Reado
 
   return merged.length > cap ? merged.slice(0, cap) : merged
 }
+
+/**
+ * Merge a batch of newly-arrived items (arrival order, oldest-first) onto an existing newest-first list,
+ * DE-DUPLICATING by `keyOf` (an item already present is dropped) and capping the result to `cap` (keeping
+ * the newest). Pure — used by the unified dashboard stream to prepend live firehose events without
+ * duplicating rows already shown from the recent backfill (a request can arrive on both paths).
+ */
+export const mergeNewestDeduped = <T>(
+  prev: ReadonlyArray<T>,
+  batchOldestFirst: ReadonlyArray<T>,
+  keyOf: (item: T) => string,
+  cap: number
+): ReadonlyArray<T> => {
+  if (batchOldestFirst.length === 0) {
+    return prev
+  }
+
+  const seen = new Set(prev.map(keyOf))
+  const fresh: Array<T> = []
+
+  // walk newest-first so the most recent arrival ends up at the head of `fresh`
+  for (let i = batchOldestFirst.length - 1; i >= 0; i--) {
+    const k = keyOf(batchOldestFirst[i])
+
+    if (!seen.has(k)) {
+      seen.add(k)
+      fresh.push(batchOldestFirst[i])
+    }
+  }
+
+  if (fresh.length === 0) {
+    return prev
+  }
+
+  const merged = fresh.concat(prev)
+
+  return merged.length > cap ? merged.slice(0, cap) : merged
+}
+
+/**
+ * Append an older page (already newest-first) onto the END of an existing newest-first list, dropping any
+ * items already present (de-duplicated by `keyOf`). Pure — backs the dashboard's infinite-scroll into
+ * older history. No cap: paging older is user-driven.
+ */
+export const appendOlderDeduped = <T>(
+  prev: ReadonlyArray<T>,
+  olderNewestFirst: ReadonlyArray<T>,
+  keyOf: (item: T) => string
+): ReadonlyArray<T> => {
+  if (olderNewestFirst.length === 0) {
+    return prev
+  }
+
+  const seen = new Set(prev.map(keyOf))
+  const fresh = olderNewestFirst.filter((item) => !seen.has(keyOf(item)))
+
+  return fresh.length === 0 ? prev : prev.concat(fresh)
+}

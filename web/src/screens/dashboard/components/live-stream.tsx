@@ -1,8 +1,8 @@
-import { Alert, Badge, Box, Flex, Group, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core'
+import { Alert, Badge, Box, Center, Flex, Group, Loader, ScrollArea, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core'
 import { useInterval } from '@mantine/hooks'
 import { IconAlertTriangle, IconBolt } from '@tabler/icons-react'
 import dayjs from 'dayjs'
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { FirehoseEvent, SessionSummary } from '~/api'
 import { methodToColor } from '~/theme'
 import { requestPeek, returnedStatus, slugColor, statusCodeToColor } from '../utils'
@@ -72,10 +72,18 @@ export const LiveStream: React.FC<{
   sessionByUUID: ReadonlyMap<string, SessionSummary>
   live: boolean
   error: Error | null
-  /** True when a session filter is applied and it hid every event. */
+  /** True when a filter is applied and it hid every event. */
   filtered: boolean
+  /** True while the initial/refresh backfill for the current filter is loading. */
+  loading: boolean
+  /** True while older events remain to be loaded (the infinite-scroll sentinel is shown). */
+  hasMore: boolean
+  /** True while an older page is being fetched. */
+  loadingOlder: boolean
+  /** Load the next (older) page; returns a promise so the sentinel can release its guard on completion. */
+  onLoadOlder: () => Promise<void>
   onRowClick: (sID: string, rID: string) => void
-}> = ({ events, sessionByUUID, live, error, filtered, onRowClick }) => {
+}> = ({ events, sessionByUUID, live, error, filtered, loading, hasMore, loadingOlder, onLoadOlder, onRowClick }) => {
   // re-render periodically so the relative "fromNow" times stay fresh without per-row timers
   const [, setTick] = useState(0)
   const interval = useInterval(() => setTick((t) => t + 1), 5000)
@@ -85,6 +93,50 @@ export const LiveStream: React.FC<{
 
     return interval.stop
   }, [interval.start, interval.stop])
+
+  // Infinite scroll into older history. Mirrors the sidebar's #185-safe pattern: a bounded scroll
+  // container (so the sentinel only intersects at the real bottom), a single observer created ONCE
+  // (deps are [hasMore, onSentinelVisible] — NOT events.length, which would re-fire for the still-
+  // visible sentinel → runaway pagination), and a synchronous re-entrancy guard.
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const loadingRef = useRef<boolean>(false)
+  const onLoadOlderRef = useRef(onLoadOlder)
+  onLoadOlderRef.current = onLoadOlder
+  const hasMoreRef = useRef<boolean>(hasMore)
+  hasMoreRef.current = hasMore
+
+  const onSentinelVisible = useCallback(() => {
+    if (loadingRef.current || !hasMoreRef.current) {
+      return
+    }
+
+    loadingRef.current = true
+    onLoadOlderRef.current().finally(() => {
+      loadingRef.current = false
+    })
+  }, [])
+
+  useEffect(() => {
+    const el = sentinelRef.current
+
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      return
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          onSentinelVisible()
+        }
+      },
+      { root: viewportRef.current ?? null, rootMargin: '200px' }
+    )
+
+    observer.observe(el)
+
+    return () => observer.disconnect()
+  }, [hasMore, onSentinelVisible])
 
   return (
     <Stack gap="xs">
@@ -112,24 +164,46 @@ export const LiveStream: React.FC<{
 
       {events.length === 0 ? (
         <Flex direction="column" align="center" justify="center" py="xl" gap={4}>
-          <Text c="dimmed">{filtered ? 'No requests for this endpoint yet.' : 'Waiting for incoming webhooks…'}</Text>
-          <Text c="dimmed" size="xs">
-            Requests captured across all endpoints appear here instantly.
-          </Text>
+          {loading ? (
+            <>
+              <Loader size="sm" color="dimmed" />
+              <Text c="dimmed" size="xs">
+                Loading recent requests…
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text c="dimmed">{filtered ? 'No requests for this filter yet.' : 'Waiting for incoming webhooks…'}</Text>
+              <Text c="dimmed" size="xs">
+                Recent requests appear here on load; new ones stream in live.
+              </Text>
+            </>
+          )}
         </Flex>
       ) : (
-        <Stack gap={0}>
-          {events.map((event) =>
-            event.request ? (
-              <StreamRow
-                key={`${event.sessionUUID}:${event.request.uuid}`}
-                event={event}
-                sessionByUUID={sessionByUUID}
-                onClick={() => event.request && onRowClick(event.sessionUUID, event.request.uuid)}
-              />
-            ) : null
+        <ScrollArea className={styles.scroll} viewportRef={viewportRef} scrollbarSize={6} type="hover">
+          <Stack gap={0}>
+            {events.map((event) =>
+              event.request ? (
+                <StreamRow
+                  key={`${event.sessionUUID}:${event.request.uuid}`}
+                  event={event}
+                  sessionByUUID={sessionByUUID}
+                  onClick={() => event.request && onRowClick(event.sessionUUID, event.request.uuid)}
+                />
+              ) : null
+            )}
+          </Stack>
+
+          {hasMore && (
+            <Center ref={sentinelRef} py="xs" data-testid="events-load-more">
+              <Loader color="dimmed" size="xs" mr={8} />
+              <Text c="dimmed" size="xs">
+                {loadingOlder ? 'Loading older requests…' : 'Scroll for older requests'}
+              </Text>
+            </Center>
           )}
-        </Stack>
+        </ScrollArea>
       )}
     </Stack>
   )

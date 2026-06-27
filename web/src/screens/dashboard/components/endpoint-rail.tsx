@@ -1,4 +1,4 @@
-import { Badge, Box, Button, Group, Skeleton, Stack, Text, UnstyledButton } from '@mantine/core'
+import { Badge, Box, Button, Group, Select, Skeleton, Stack, Text, UnstyledButton } from '@mantine/core'
 import { IconCirclePlusFilled, IconStack2 } from '@tabler/icons-react'
 import React from 'react'
 import type { SessionSummary } from '~/api'
@@ -14,10 +14,15 @@ export const EndpointRail: React.FC<{
   /** Currently selected session UUID, or null for "All". */
   selected: string | null
   onSelect: (uuid: string | null) => void
+  /** Distinct group names available across all sessions (for the group filter). */
+  groups: ReadonlyArray<string>
+  /** Currently selected group filter, or null for "All groups". */
+  groupFilter: string | null
+  onGroupFilter: (group: string | null) => void
   /** Session UUIDs that captured a webhook in the live stream recently (shows a pulsing dot). */
   activeUUIDs: ReadonlySet<string>
   onNewSession: () => void
-}> = ({ sessions, loading, selected, onSelect, activeUUIDs, onNewSession }) => {
+}> = ({ sessions, loading, selected, onSelect, groups, groupFilter, onGroupFilter, activeUUIDs, onNewSession }) => {
   return (
     <Stack gap="xs">
       <Group justify="space-between" align="center" wrap="nowrap">
@@ -35,6 +40,18 @@ export const EndpointRail: React.FC<{
           New
         </Button>
       </Group>
+
+      <Select
+        size="xs"
+        label="Group"
+        placeholder="All groups"
+        data={[{ value: '', label: 'All groups' }, ...groups.map((g) => ({ value: g, label: g }))]}
+        value={groupFilter ?? ''}
+        onChange={(v) => onGroupFilter(v ? v : null)}
+        comboboxProps={{ withinPortal: true }}
+        clearable
+        aria-label="Filter stream by group"
+      />
 
       <UnstyledButton
         className={`${styles.item} ${selected === ALL_SESSIONS ? styles.itemActive : ''}`}
