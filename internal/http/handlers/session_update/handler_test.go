@@ -59,6 +59,51 @@ func TestHandler_AppliesPatchAndReturnsUpdated(t *testing.T) {
 	_ = sID
 }
 
+func TestHandler_SetsAndClearsInboundAuth(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	sID, err := db.NewSession(ctx, storage.Session{Slug: "auth-up"})
+	require.NoError(t, err)
+
+	h := session_update.New(db)
+
+	// set inbound auth
+	resp, hErr := h.Handle(ctx, "auth-up", openapi.UpdateSessionRequest{
+		InboundAuthHeader: strPtr("X-Token"),
+		InboundAuthValue:  strPtr("v1"),
+	})
+	require.NoError(t, hErr)
+	require.NotNil(t, resp.Response.InboundAuthHeader)
+	assert.Equal(t, "X-Token", *resp.Response.InboundAuthHeader)
+	require.NotNil(t, resp.Response.InboundAuthValue)
+	assert.Equal(t, "v1", *resp.Response.InboundAuthValue)
+
+	sess, err := db.GetSession(ctx, sID)
+	require.NoError(t, err)
+	assert.Equal(t, "X-Token", sess.InboundAuthHeader)
+	assert.Equal(t, "v1", sess.InboundAuthValue)
+
+	// clear inbound auth (empty string disables it)
+	resp, hErr = h.Handle(ctx, "auth-up", openapi.UpdateSessionRequest{
+		InboundAuthHeader: strPtr(""),
+		InboundAuthValue:  strPtr(""),
+	})
+	require.NoError(t, hErr)
+	assert.Nil(t, resp.Response.InboundAuthHeader, "cleared inbound auth header must be omitted from the response")
+
+	sess, err = db.GetSession(ctx, sID)
+	require.NoError(t, err)
+	assert.Empty(t, sess.InboundAuthHeader)
+	assert.Empty(t, sess.InboundAuthValue)
+}
+
 func TestHandler_SlugConflictReturns409(t *testing.T) {
 	t.Parallel()
 

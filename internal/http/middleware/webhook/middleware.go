@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -140,6 +141,11 @@ func New( //nolint:funlen,gocognit,gocyclo
 
 			var fullURL = extractFullUrl(r)
 
+			// evaluate inbound auth BEFORE capture so the stored request carries the flag. A
+			// request that fails inbound auth is still captured fully (below); it is just flagged
+			// Authorized=false and answered with a 401 (the response script is skipped).
+			var authorized = inboundAuthorized(r, sess)
+
 			// and save the request to the storage
 			rID, rErr := db.NewRequest(reqCtx, sID, storage.Request{ //nolint:contextcheck
 				ClientAddr: extractRealIP(r),
@@ -147,6 +153,7 @@ func New( //nolint:funlen,gocognit,gocyclo
 				Body:       body,
 				Headers:    rHeaders,
 				URL:        fullURL,
+				Authorized: authorized,
 			})
 			if rErr != nil {
 				respondWithError(w, log, http.StatusInternalServerError, rErr.Error())
@@ -203,6 +210,19 @@ func New( //nolint:funlen,gocognit,gocyclo
 					log.Error("failed to publish a captured request", zap.Error(err))
 				}
 			}()
+
+			// inbound auth failed: the request was captured above (flagged Authorized=false); answer
+			// with a 401 and skip the response script / static response (and the configured delay).
+			// Security headers are still applied, consistent with the success paths.
+			if !authorized {
+				for _, h := range sess.SecurityHeaders {
+					w.Header().Set(h.Name, h.Value)
+				}
+
+				respondUnauthorized(w, log)
+
+				return
+			}
 
 			// wait for the delay if it's set
 			if sess.Delay > 0 {
@@ -376,6 +396,36 @@ func respondWithError(w http.ResponseWriter, log *zap.Logger, code int, msg stri
 
 	if _, err := w.Write([]byte(s.String())); err != nil {
 		log.Error("failed to respond with an error", zap.Error(err), zap.Int("code", code), zap.String("msg", msg))
+	}
+}
+
+// inboundAuthorized reports whether the incoming webhook request satisfies the session's
+// inbound-auth configuration. An empty InboundAuthHeader means inbound auth is disabled (the
+// endpoint is public), so the request is always authorized. Otherwise the incoming header value
+// (looked up case-insensitively via http.Header.Get) must equal the configured value; the
+// comparison uses crypto/subtle.ConstantTimeCompare to avoid leaking the secret via timing.
+func inboundAuthorized(r *http.Request, sess *storage.Session) bool {
+	if sess.InboundAuthHeader == "" {
+		return true
+	}
+
+	var got = r.Header.Get(sess.InboundAuthHeader)
+
+	return subtle.ConstantTimeCompare([]byte(got), []byte(sess.InboundAuthValue)) == 1
+}
+
+// respondUnauthorized writes the small JSON 401 used when an inbound-auth-protected webhook is
+// posted without a valid token. The request has already been captured (flagged Authorized=false);
+// the response script and static response are intentionally skipped.
+func respondUnauthorized(w http.ResponseWriter, log *zap.Logger) {
+	const body = `{"error":"unauthorized webhook"}`
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusUnauthorized)
+
+	if _, err := w.Write([]byte(body)); err != nil {
+		log.Error("failed to write the unauthorized webhook response", zap.Error(err))
 	}
 }
 

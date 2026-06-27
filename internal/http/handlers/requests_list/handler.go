@@ -48,6 +48,7 @@ func (h *Handler) Handle(ctx context.Context, sID sID) (*openapi.CapturedRequest
 			RequestPayloadBase64: base64.StdEncoding.EncodeToString(r.Body),
 			Url:                  r.URL,
 			Uuid:                 rUUID,
+			Authorized:           r.Authorized,
 		})
 
 		// sort the list by the captured time from newest to oldest

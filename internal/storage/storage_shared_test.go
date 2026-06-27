@@ -90,6 +90,52 @@ func testSessionCreateReadDelete(
 		require.ErrorIs(t, getErr, storage.ErrSessionNotFound)
 	})
 
+	t.Run("inbound auth config round-trips", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = new(time.Minute, 1)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		// create with inbound auth configured
+		sID, err := impl.NewSession(ctx, storage.Session{
+			Code:              200,
+			InboundAuthHeader: "X-Webhook-Token",
+			InboundAuthValue:  "s3cr3t-value",
+		})
+		require.NoError(t, err)
+
+		got, err := impl.GetSession(ctx, sID)
+		require.NoError(t, err)
+		require.Equal(t, "X-Webhook-Token", got.InboundAuthHeader)
+		require.Equal(t, "s3cr3t-value", got.InboundAuthValue)
+
+		// update can change and then clear it (empty header disables inbound auth)
+		var (
+			newHeader = "Authorization"
+			newValue  = "Bearer abc"
+		)
+		require.NoError(t, impl.UpdateSession(ctx, sID, storage.SessionPatch{
+			InboundAuthHeader: &newHeader,
+			InboundAuthValue:  &newValue,
+		}))
+
+		got, err = impl.GetSession(ctx, sID)
+		require.NoError(t, err)
+		require.Equal(t, "Authorization", got.InboundAuthHeader)
+		require.Equal(t, "Bearer abc", got.InboundAuthValue)
+
+		var empty string
+		require.NoError(t, impl.UpdateSession(ctx, sID, storage.SessionPatch{
+			InboundAuthHeader: &empty,
+			InboundAuthValue:  &empty,
+		}))
+
+		got, err = impl.GetSession(ctx, sID)
+		require.NoError(t, err)
+		require.Empty(t, got.InboundAuthHeader, "empty header clears inbound auth")
+		require.Empty(t, got.InboundAuthValue)
+	})
+
 	t.Run("not found", func(t *testing.T) {
 		t.Parallel()
 
@@ -220,13 +266,14 @@ func testRequestCreateReadDelete(
 
 		var requestHeaders = []storage.HttpHeader{{"foo", "bar"}, {"bar", "baz"}}
 
-		// create
+		// create (the common no-auth / auth-passed case is captured Authorized=true)
 		rID, newReqErr := impl.NewRequest(ctx, sID, storage.Request{
 			ClientAddr: clientAddr,
 			Method:     method,
 			Body:       []byte(body),
 			Headers:    requestHeaders,
 			URL:        someUrl,
+			Authorized: true,
 		})
 		require.NoError(t, newReqErr)
 		require.NotEmpty(t, rID)
@@ -240,6 +287,7 @@ func testRequestCreateReadDelete(
 		require.Equal(t, requestHeaders, got.Headers)
 		require.Equal(t, someUrl, got.URL)
 		assert.NotZero(t, got.CreatedAtUnixMilli)
+		require.True(t, got.Authorized, "Authorized=true must round-trip")
 
 		{ // read all
 			all, err := impl.GetAllRequests(ctx, sID)
@@ -258,6 +306,38 @@ func testRequestCreateReadDelete(
 		require.Nil(t, got)
 		require.ErrorIs(t, getErr, storage.ErrNotFound)
 		require.ErrorIs(t, getErr, storage.ErrRequestNotFound)
+	})
+
+	t.Run("authorized flag round-trips (true and false)", func(t *testing.T) {
+		t.Parallel()
+
+		var impl = new(time.Minute, 10)
+		defer func() { _ = toCloser(impl).Close() }()
+
+		sID, err := impl.NewSession(ctx, storage.Session{})
+		require.NoError(t, err)
+
+		// an auth-passed (or no-auth) request is captured Authorized=true
+		okID, err := impl.NewRequest(ctx, sID, storage.Request{Method: "POST", Authorized: true})
+		require.NoError(t, err)
+
+		okReq, err := impl.GetRequest(ctx, sID, okID)
+		require.NoError(t, err)
+		require.True(t, okReq.Authorized, "Authorized=true must round-trip on GetRequest")
+
+		// a rejected inbound-auth request is STILL captured, flagged Authorized=false
+		noID, err := impl.NewRequest(ctx, sID, storage.Request{Method: "POST", Authorized: false})
+		require.NoError(t, err)
+
+		noReq, err := impl.GetRequest(ctx, sID, noID)
+		require.NoError(t, err)
+		require.False(t, noReq.Authorized, "Authorized=false must round-trip on GetRequest")
+
+		// GetAllRequests carries the flag too
+		all, err := impl.GetAllRequests(ctx, sID)
+		require.NoError(t, err)
+		require.True(t, all[okID].Authorized)
+		require.False(t, all[noID].Authorized)
 	})
 
 	t.Run("new request - limit exceeded", func(t *testing.T) {

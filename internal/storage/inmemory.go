@@ -522,6 +522,14 @@ func (s *InMemory) UpdateSession(ctx context.Context, sID string, patch SessionP
 		data.session.LongLived = *patch.LongLived
 	}
 
+	if patch.InboundAuthHeader != nil {
+		data.session.InboundAuthHeader = *patch.InboundAuthHeader
+	}
+
+	if patch.InboundAuthValue != nil {
+		data.session.InboundAuthValue = *patch.InboundAuthValue
+	}
+
 	newSlug := data.session.Slug
 
 	// maintain slug index: remove old, add new (if changed)

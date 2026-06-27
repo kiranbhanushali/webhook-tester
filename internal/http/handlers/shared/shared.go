@@ -127,5 +127,18 @@ func SessionResponse(sess *storage.Session) openapi.SessionOptionsResponse {
 	longLived := sess.LongLived
 	resp.Response.LongLived = &longLived
 
+	// inbound auth is exposed only when configured (empty header = disabled). The value is a
+	// secret, but the dashboard API is auth-gated, so returning it is acceptable (consistent
+	// with response_script). It is never logged.
+	if sess.InboundAuthHeader != "" {
+		h := sess.InboundAuthHeader
+		resp.Response.InboundAuthHeader = &h
+	}
+
+	if sess.InboundAuthValue != "" {
+		v := sess.InboundAuthValue
+		resp.Response.InboundAuthValue = &v
+	}
+
 	return resp
 }

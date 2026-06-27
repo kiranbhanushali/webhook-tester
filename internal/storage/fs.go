@@ -933,6 +933,14 @@ func (s *FS) UpdateSession(ctx context.Context, sID string, patch SessionPatch) 
 		sess.LongLived = *patch.LongLived
 	}
 
+	if patch.InboundAuthHeader != nil {
+		sess.InboundAuthHeader = *patch.InboundAuthHeader
+	}
+
+	if patch.InboundAuthValue != nil {
+		sess.InboundAuthValue = *patch.InboundAuthValue
+	}
+
 	// re-encode and overwrite the session file (same expiry filename, same content slot)
 	data, err := s.encDec.Encode(sess)
 	if err != nil {

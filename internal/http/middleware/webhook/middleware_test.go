@@ -292,6 +292,173 @@ func TestCapture_NonWebhookPaths_PassThrough(t *testing.T) {
 	}
 }
 
+// inbound-auth helpers/tests ------------------------------------------------
+
+const (
+	inboundAuthHeader = "X-Webhook-Token"
+	inboundAuthValue  = "s3cr3t-token"
+	// authScript renders a distinctive body so we can prove the response script runs on the
+	// authorized path and is skipped on the rejected (401) path.
+	authScript = "@status 202\nSCRIPT-RAN:{{ .Slug }}"
+)
+
+// onlyRequest returns the single captured request for a session, failing if not exactly one.
+func onlyRequest(t *testing.T, db storage.Storage, sID string) storage.Request {
+	t.Helper()
+
+	all, err := db.GetAllRequests(context.Background(), sID)
+	require.NoError(t, err)
+	require.Len(t, all, 1, "exactly one request must have been captured")
+
+	for _, r := range all {
+		return r
+	}
+
+	return storage.Request{}
+}
+
+// (f) inbound auth configured, request WITHOUT the header → 401, captured (authorized=false),
+// response script NOT run.
+func TestCapture_InboundAuth_MissingHeader_401_CapturedUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:              200,
+		Slug:              "guarded",
+		ResponseScript:    authScript,
+		SecurityHeaders:   []storage.HttpHeader{{Name: "X-Frame-Options", Value: "DENY"}},
+		InboundAuthHeader: inboundAuthHeader,
+		InboundAuthValue:  inboundAuthValue,
+	})
+	require.NoError(t, err)
+
+	var (
+		h = newTestHandler(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+		r = httptest.NewRequest(http.MethodPost, "/w/guarded/foo", strings.NewReader(`{"x":1}`))
+		w = httptest.NewRecorder()
+	)
+
+	h.ServeHTTP(w, r)
+
+	// 401 with the JSON error body; the response script must NOT have run
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Contains(t, w.Body.String(), `"error":"unauthorized webhook"`)
+	require.NotContains(t, w.Body.String(), "SCRIPT-RAN", "response script must not run on a rejected request")
+
+	// the request is STILL captured and flagged authorized=false
+	require.NotEmpty(t, w.Header().Get("X-Wh-Request-Id"))
+	require.Empty(t, w.Header().Get(passThroughMarker))
+
+	got := onlyRequest(t, db, sID)
+	require.False(t, got.Authorized, "rejected request must be captured with authorized=false")
+}
+
+// (g) inbound auth configured, request with the WRONG value → 401, captured (authorized=false).
+func TestCapture_InboundAuth_WrongValue_401_CapturedUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:              200,
+		Slug:              "guarded2",
+		ResponseScript:    authScript,
+		InboundAuthHeader: inboundAuthHeader,
+		InboundAuthValue:  inboundAuthValue,
+	})
+	require.NoError(t, err)
+
+	var (
+		h = newTestHandler(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+		r = httptest.NewRequest(http.MethodPost, "/w/guarded2", strings.NewReader(`{"x":1}`))
+		w = httptest.NewRecorder()
+	)
+
+	r.Header.Set(inboundAuthHeader, "wrong-value")
+	h.ServeHTTP(w, r)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Contains(t, w.Body.String(), `"error":"unauthorized webhook"`)
+	require.NotContains(t, w.Body.String(), "SCRIPT-RAN")
+
+	got := onlyRequest(t, db, sID)
+	require.False(t, got.Authorized)
+}
+
+// (h) inbound auth configured, request with the CORRECT value → 200, script runs, authorized=true.
+func TestCapture_InboundAuth_CorrectValue_RunsScript_Authorized(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:              200,
+		Slug:              "guarded3",
+		ResponseScript:    authScript,
+		InboundAuthHeader: inboundAuthHeader,
+		InboundAuthValue:  inboundAuthValue,
+	})
+	require.NoError(t, err)
+
+	var (
+		h = newTestHandler(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+		r = httptest.NewRequest(http.MethodPost, "/w/guarded3", strings.NewReader(`{"x":1}`))
+		w = httptest.NewRecorder()
+	)
+
+	// header-name lookup is case-insensitive: send a differently-cased name on purpose
+	r.Header.Set("x-webhook-token", inboundAuthValue)
+	h.ServeHTTP(w, r)
+
+	require.Equal(t, http.StatusAccepted, w.Code) // @status 202 from the script
+	require.Contains(t, w.Body.String(), "SCRIPT-RAN:guarded3", "the response script must run on the authorized path")
+
+	got := onlyRequest(t, db, sID)
+	require.True(t, got.Authorized, "authorized request must be captured with authorized=true")
+}
+
+// (i) no inbound auth configured → behaves exactly as before, captured authorized=true.
+func TestCapture_NoInboundAuth_Authorized(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:         201,
+		Slug:         "public-ep",
+		ResponseBody: []byte("ok-body"),
+	})
+	require.NoError(t, err)
+
+	var (
+		h = newTestHandler(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+		r = httptest.NewRequest(http.MethodPost, "/w/public-ep", strings.NewReader(`{"x":1}`))
+		w = httptest.NewRecorder()
+	)
+
+	h.ServeHTTP(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+	require.Equal(t, "ok-body", w.Body.String())
+
+	got := onlyRequest(t, db, sID)
+	require.True(t, got.Authorized, "a request to a public endpoint must be authorized=true")
+}
+
 // status-code-from-URL-path override is scoped to segments AFTER /w/{ref}.
 func TestCapture_StatusOverrideInTail(t *testing.T) {
 	t.Parallel()

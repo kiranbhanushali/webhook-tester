@@ -112,6 +112,14 @@ type (
 		SecurityHeaders    []HttpHeader  `json:"security_headers"`      // extra security response headers
 		ForwardURL         string        `json:"forward_url"`           // upstream URL for request forwarding
 		LongLived          bool          `json:"long_lived"`            // if true, session does not expire
+
+		// InboundAuthHeader is the name of the HTTP header an incoming webhook POST must carry to
+		// be authorized on the public /w/{slug} path. An empty value disables inbound auth (the
+		// endpoint is public — current behavior). The lookup is case-insensitive.
+		InboundAuthHeader string `json:"inbound_auth_header"`
+		// InboundAuthValue is the expected value of InboundAuthHeader (a secret). It is compared to
+		// the incoming header value in constant time. Ignored when InboundAuthHeader is empty.
+		InboundAuthValue string `json:"inbound_auth_value"`
 	}
 
 	// Request describes recorded request and additional meta-data.
@@ -135,6 +143,13 @@ type (
 		// inmemory/fs drivers use a per-driver atomic counter (monotonic for the process
 		// lifetime, reset on restart). The Redis driver has no sequence (best-effort 0).
 		Seq int64 `json:"seq"`
+
+		// Authorized reports whether the captured request satisfied the session's inbound-auth
+		// configuration. It is true for sessions with no inbound auth and for requests that
+		// presented the correct header/value; it is false for requests rejected by inbound auth
+		// (which are still captured). It is an output field, set by the caller (the webhook
+		// middleware) at capture time and persisted/returned by every driver.
+		Authorized bool `json:"authorized"`
 	}
 
 	HttpHeader struct {
@@ -145,16 +160,18 @@ type (
 	// SessionPatch holds optional overrides applied by UpdateSession.
 	// Only non-nil pointer fields are written; nil fields are left unchanged.
 	SessionPatch struct {
-		Slug            *string
-		GroupName       *string
-		ResponseScript  *string
-		ForwardURL      *string
-		Code            *uint16
-		Headers         *[]HttpHeader
-		SecurityHeaders *[]HttpHeader
-		ResponseBody    *[]byte
-		Delay           *time.Duration
-		LongLived       *bool
+		Slug              *string
+		GroupName         *string
+		ResponseScript    *string
+		ForwardURL        *string
+		Code              *uint16
+		Headers           *[]HttpHeader
+		SecurityHeaders   *[]HttpHeader
+		ResponseBody      *[]byte
+		Delay             *time.Duration
+		LongLived         *bool
+		InboundAuthHeader *string // empty string clears (disables) inbound auth
+		InboundAuthValue  *string
 	}
 
 	// SessionFilter restricts which sessions are returned by ListSessions.

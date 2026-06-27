@@ -61,6 +61,8 @@ func (h *Handler) Handle(
 // buildPatch maps the OpenAPI request to a storage.SessionPatch, setting only
 // the fields the client provided. It validates a supplied slug and decodes the
 // response body, returning shared.ErrBadRequest on malformed input.
+//
+//nolint:funlen // a flat field-by-field builder; its length scales with the number of session fields
 func buildPatch(p openapi.UpdateSessionRequest) (storage.SessionPatch, error) {
 	var patch storage.SessionPatch
 
@@ -111,6 +113,16 @@ func buildPatch(p openapi.UpdateSessionRequest) (storage.SessionPatch, error) {
 	if p.SecurityHeaders != nil {
 		sh := shared.ToStorageHeaders(*p.SecurityHeaders)
 		patch.SecurityHeaders = &sh
+	}
+
+	if p.InboundAuthHeader != nil {
+		v := *p.InboundAuthHeader
+		patch.InboundAuthHeader = &v
+	}
+
+	if p.InboundAuthValue != nil {
+		v := *p.InboundAuthValue
+		patch.InboundAuthValue = &v
 	}
 
 	if p.ResponseBodyBase64 != nil {

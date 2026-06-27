@@ -133,6 +133,14 @@ func NewSQLite(
 		return nil, fmt.Errorf("migrate request seq: %w", err)
 	}
 
+	// Idempotent migration so a pre-existing database (created before the inbound-auth feature)
+	// gains the sessions.inbound_auth_* and requests.authorized columns safely.
+	if err = migrateInboundAuth(ctx, db); err != nil {
+		_ = db.Close()
+
+		return nil, fmt.Errorf("migrate inbound auth: %w", err)
+	}
+
 	var s = SQLite{
 		db:              db,
 		sessionTTL:      sessionTTL,
@@ -237,9 +245,10 @@ func (s *SQLite) Close() error {
 }
 
 const sessionCols = `id, slug, group_name, code, headers_json, response_body, delay_millis, ` +
-	`response_script, security_headers, forward_url, long_lived, created_at_ms, expires_at_ms`
+	`response_script, security_headers, forward_url, long_lived, created_at_ms, expires_at_ms, ` +
+	`inbound_auth_header, inbound_auth_value`
 
-const requestCols = `id, method, body, headers_json, url, client_addr, created_at_ms, seq`
+const requestCols = `id, method, body, headers_json, url, client_addr, created_at_ms, seq, authorized`
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
 type rowScanner interface{ Scan(dest ...any) error }
@@ -274,12 +283,13 @@ func (s *SQLite) NewSession(ctx context.Context, session Session, id ...string) 
 		return "", sErr
 	}
 
-	const q = `INSERT INTO sessions (` + sessionCols + `) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	const q = `INSERT INTO sessions (` + sessionCols + `) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 	_, err := s.db.ExecContext(ctx, q,
 		sID, session.Slug, session.GroupName, session.Code, headers, session.ResponseBody,
 		session.Delay.Milliseconds(), session.ResponseScript, security, session.ForwardURL,
-		boolToInt(session.LongLived), session.CreatedAtUnixMilli, session.ExpiresAt.UnixMilli())
+		boolToInt(session.LongLived), session.CreatedAtUnixMilli, session.ExpiresAt.UnixMilli(),
+		session.InboundAuthHeader, session.InboundAuthValue)
 	if err != nil {
 		if isUniqueViolation(err) {
 			if session.Slug != "" && strings.Contains(err.Error(), "slug") {
@@ -436,10 +446,11 @@ func (s *SQLite) NewRequest(ctx context.Context, sID string, r Request) (string,
 	}
 
 	const insReq = `INSERT INTO requests (id, session_id, method, body, headers_json, url, client_addr, ` +
-		`created_at_ms, seq) VALUES (?,?,?,?,?,?,?,?,?)`
+		`created_at_ms, seq, authorized) VALUES (?,?,?,?,?,?,?,?,?,?)`
 
 	if _, err = tx.ExecContext(ctx, insReq,
-		rID, sID, r.Method, r.Body, headers, r.URL, r.ClientAddr, r.CreatedAtUnixMilli, seq); err != nil {
+		rID, sID, r.Method, r.Body, headers, r.URL, r.ClientAddr, r.CreatedAtUnixMilli, seq,
+		boolToInt(r.Authorized)); err != nil {
 		return "", fmt.Errorf("insert request: %w", err)
 	}
 
@@ -837,6 +848,8 @@ func (s *SQLite) ensureSessionExists(ctx context.Context, sID string) error {
 }
 
 // buildSessionPatch turns a SessionPatch into SET clauses and their args.
+//
+//nolint:funlen // a flat field-by-field builder; its length scales with the number of session fields
 func buildSessionPatch(patch SessionPatch) (sets []string, args []any, _ error) {
 	var add = func(col string, v any) {
 		sets = append(sets, col+" = ?")
@@ -875,6 +888,14 @@ func buildSessionPatch(patch SessionPatch) (sets []string, args []any, _ error) 
 		add("long_lived", boolToInt(*patch.LongLived))
 	}
 
+	if patch.InboundAuthHeader != nil {
+		add("inbound_auth_header", *patch.InboundAuthHeader)
+	}
+
+	if patch.InboundAuthValue != nil {
+		add("inbound_auth_value", *patch.InboundAuthValue)
+	}
+
 	if patch.Headers != nil {
 		h, err := marshalHeaders(*patch.Headers)
 		if err != nil {
@@ -901,6 +922,7 @@ func scanSession(sc rowScanner) (*Session, error) {
 	var (
 		sess                                               Session
 		id, slug, group, headersJSON, script, secJSON, fwd string
+		inboundAuthHeader, inboundAuthValue                string
 		code                                               uint16
 		body                                               []byte
 		delayMs, createdMs, expiresMs                      int64
@@ -908,7 +930,8 @@ func scanSession(sc rowScanner) (*Session, error) {
 	)
 
 	if err := sc.Scan(&id, &slug, &group, &code, &headersJSON, &body, &delayMs,
-		&script, &secJSON, &fwd, &longLived, &createdMs, &expiresMs); err != nil {
+		&script, &secJSON, &fwd, &longLived, &createdMs, &expiresMs,
+		&inboundAuthHeader, &inboundAuthValue); err != nil {
 		return nil, err
 	}
 
@@ -935,6 +958,8 @@ func scanSession(sc rowScanner) (*Session, error) {
 	sess.SecurityHeaders = security
 	sess.ForwardURL = fwd
 	sess.LongLived = longLived != 0
+	sess.InboundAuthHeader = inboundAuthHeader
+	sess.InboundAuthValue = inboundAuthValue
 
 	return &sess, nil
 }
@@ -946,9 +971,11 @@ func scanRequest(sc rowScanner) (string, *Request, error) {
 		id, method, headersJSON, reqURL, clientAddr string
 		body                                        []byte
 		createdMs, seq                              int64
+		authorized                                  int
 	)
 
-	if err := sc.Scan(&id, &method, &body, &headersJSON, &reqURL, &clientAddr, &createdMs, &seq); err != nil {
+	if err := sc.Scan(&id, &method, &body, &headersJSON, &reqURL, &clientAddr, &createdMs, &seq,
+		&authorized); err != nil {
 		return "", nil, err
 	}
 
@@ -966,6 +993,7 @@ func scanRequest(sc rowScanner) (string, *Request, error) {
 		URL:                reqURL,
 		CreatedAtUnixMilli: createdMs,
 		Seq:                seq,
+		Authorized:         authorized != 0,
 	}, nil
 }
 
@@ -1060,33 +1088,56 @@ func migrateRequestSeq(ctx context.Context, db *sql.DB) error {
 
 // requestsHasSeqColumn reports whether the requests table already has a seq column.
 func requestsHasSeqColumn(ctx context.Context, db *sql.DB) (bool, error) {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(requests)`)
+	return tableHasColumn(ctx, db, "requests", "seq")
+}
+
+// tableHasColumn reports whether the given table already has the named column. It uses the
+// pragma_table_info table-valued function so the table name is bound as a parameter (no string
+// interpolation into SQL), which keeps it injection-safe and linter-clean.
+func tableHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
 	if err != nil {
-		return false, fmt.Errorf("inspect requests columns: %w", err)
+		return false, fmt.Errorf("inspect %s columns: %w", table, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	for rows.Next() {
-		var (
-			cid, notNull, pk int
-			name, ctype      string
-			dflt             sql.NullString
-		)
-
-		if err = rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
-			return false, fmt.Errorf("scan column info: %w", err)
-		}
-
-		if name == "seq" {
-			return true, nil
-		}
-	}
+	var has = rows.Next()
 
 	if err = rows.Err(); err != nil {
 		return false, fmt.Errorf("iterate column info: %w", err)
 	}
 
-	return false, nil
+	return has, nil
+}
+
+// migrateInboundAuth idempotently adds the inbound-auth columns to a pre-existing database:
+// sessions.inbound_auth_header, sessions.inbound_auth_value (default empty = public, no inbound
+// auth) and requests.authorized (default 1 = authorized, so historical requests captured before
+// inbound auth existed read back as authorized). It is safe to run on a fresh database (the
+// columns already exist via the embedded schema, so each ALTER is skipped) and on every startup.
+func migrateInboundAuth(ctx context.Context, db *sql.DB) error {
+	var migrations = []struct{ table, column, ddl string }{
+		{"sessions", "inbound_auth_header", `ALTER TABLE sessions ADD COLUMN inbound_auth_header TEXT NOT NULL DEFAULT ''`},
+		{"sessions", "inbound_auth_value", `ALTER TABLE sessions ADD COLUMN inbound_auth_value TEXT NOT NULL DEFAULT ''`},
+		{"requests", "authorized", `ALTER TABLE requests ADD COLUMN authorized INTEGER NOT NULL DEFAULT 1`},
+	}
+
+	for _, m := range migrations {
+		has, err := tableHasColumn(ctx, db, m.table, m.column)
+		if err != nil {
+			return err
+		}
+
+		if has {
+			continue
+		}
+
+		if _, err = db.ExecContext(ctx, m.ddl); err != nil {
+			return fmt.Errorf("add %s.%s column: %w", m.table, m.column, err)
+		}
+	}
+
+	return nil
 }
 
 // isUniqueViolation reports whether err is a SQLite UNIQUE/PRIMARY KEY constraint failure.

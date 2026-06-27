@@ -139,6 +139,37 @@ func TestHandler_DefaultsAndClamp(t *testing.T) {
 	assert.False(t, clamped.HasMore)
 }
 
+func TestHandler_EventsIncludeAuthorizedFlag(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 100)
+		h   = session_events.New(db)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	sID, err := db.NewSession(ctx, storage.Session{Slug: "auth-ev"})
+	require.NoError(t, err)
+
+	_, err = db.NewRequest(ctx, sID, storage.Request{Method: "POST", Authorized: true})
+	require.NoError(t, err)
+
+	time.Sleep(time.Millisecond) // distinct capture order
+
+	_, err = db.NewRequest(ctx, sID, storage.Request{Method: "POST", Authorized: false})
+	require.NoError(t, err)
+
+	resp, err := h.Handle(ctx, sID, openapi.ApiSessionEventsParams{})
+	require.NoError(t, err)
+	require.Len(t, resp.Events, 2)
+
+	// FIFO (oldest first): the authorized request, then the rejected one
+	assert.True(t, resp.Events[0].Authorized, "first (authorized) event must surface authorized=true")
+	assert.False(t, resp.Events[1].Authorized, "second (rejected) event must surface authorized=false")
+}
+
 func TestHandler_UnknownRef_NotFound(t *testing.T) {
 	t.Parallel()
 

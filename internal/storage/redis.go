@@ -508,6 +508,14 @@ func (s *Redis) UpdateSession(ctx context.Context, sID string, patch SessionPatc
 		sess.LongLived = *patch.LongLived
 	}
 
+	if patch.InboundAuthHeader != nil {
+		sess.InboundAuthHeader = *patch.InboundAuthHeader
+	}
+
+	if patch.InboundAuthValue != nil {
+		sess.InboundAuthValue = *patch.InboundAuthValue
+	}
+
 	data, mErr := s.encDec.Encode(sess)
 	if mErr != nil {
 		return mErr

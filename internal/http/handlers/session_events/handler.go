@@ -107,5 +107,6 @@ func toEventItem(r storage.Request) openapi.EventItem {
 		Headers:              headers,
 		Url:                  r.URL,
 		CapturedAtUnixMilli:  r.CreatedAtUnixMilli,
+		Authorized:           r.Authorized,
 	}
 }

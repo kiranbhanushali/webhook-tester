@@ -37,5 +37,6 @@ func (h *Handler) Handle(ctx context.Context, sID sID, rID rID) (*openapi.Captur
 		RequestPayloadBase64: base64.StdEncoding.EncodeToString(r.Body),
 		Url:                  r.URL,
 		Uuid:                 rID,
+		Authorized:           r.Authorized,
 	}, nil
 }

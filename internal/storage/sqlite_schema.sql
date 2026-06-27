@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   forward_url      TEXT NOT NULL DEFAULT '',        -- default replay target
   long_lived       INTEGER NOT NULL DEFAULT 0,      -- 1 = never auto-expire
   created_at_ms    INTEGER NOT NULL,
-  expires_at_ms    INTEGER NOT NULL                 -- ignored when long_lived = 1
+  expires_at_ms    INTEGER NOT NULL,                -- ignored when long_lived = 1
+  inbound_auth_header TEXT NOT NULL DEFAULT '',     -- inbound-auth header name ('' = public, no inbound auth)
+  inbound_auth_value  TEXT NOT NULL DEFAULT ''      -- expected inbound-auth header value (secret)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_group ON sessions(group_name);
@@ -39,7 +41,8 @@ CREATE TABLE IF NOT EXISTS requests (
   url           TEXT NOT NULL,
   client_addr   TEXT NOT NULL,
   created_at_ms INTEGER NOT NULL,
-  seq           INTEGER NOT NULL DEFAULT 0       -- durable FIFO sequence (see counters / migrateRequestSeq)
+  seq           INTEGER NOT NULL DEFAULT 0,      -- durable FIFO sequence (see counters / migrateRequestSeq)
+  authorized    INTEGER NOT NULL DEFAULT 1       -- 0 = rejected by inbound auth (still captured); 1 = authorized
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_session_time ON requests(session_id, created_at_ms DESC);

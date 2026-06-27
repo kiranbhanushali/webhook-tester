@@ -64,6 +64,14 @@ func (h *Handler) Handle(ctx context.Context, p openapi.CreateSessionRequest) (*
 		newSession.LongLived = *p.LongLived
 	}
 
+	if p.InboundAuthHeader != nil {
+		newSession.InboundAuthHeader = *p.InboundAuthHeader
+	}
+
+	if p.InboundAuthValue != nil {
+		newSession.InboundAuthValue = *p.InboundAuthValue
+	}
+
 	sID, sErr := h.db.NewSession(ctx, newSession)
 	if sErr != nil {
 		return nil, fmt.Errorf("failed to create a new session: %w", sErr)

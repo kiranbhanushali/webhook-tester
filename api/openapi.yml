@@ -369,6 +369,8 @@ components:
           description: Additional security headers to add to every captured-request response
         forward_url: {type: string, example: 'https://example.com/webhook', description: Forward incoming requests to this URL}
         long_lived: {type: boolean, example: false, description: If true the session does not expire on the normal TTL}
+        inbound_auth_header: {type: string, maxLength: 1024, example: 'X-Webhook-Token', description: 'Header name an incoming webhook POST must carry to be authorized; empty disables inbound auth (public endpoint)'}
+        inbound_auth_value: {type: string, maxLength: 4096, example: 'super-secret', description: 'Expected value of inbound_auth_header (a secret). Ignored when inbound_auth_header is empty'}
       required: [status_code, headers, delay, response_body_base64]
       additionalProperties: false
 
@@ -415,6 +417,8 @@ components:
         security_headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
         forward_url: {type: string, example: 'https://example.com/webhook'}
         long_lived: {type: boolean, example: false}
+        inbound_auth_header: {type: string, maxLength: 1024, example: 'X-Webhook-Token', description: 'Header name an incoming webhook POST must carry to be authorized; empty disables inbound auth'}
+        inbound_auth_value: {type: string, maxLength: 4096, example: 'super-secret', description: 'Expected value of inbound_auth_header (a secret)'}
       additionalProperties: false
 
     ReplayRequest:
@@ -477,7 +481,8 @@ components:
           type: string
           example: 'https://example.com/path?query=string'
         captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
-      required: [uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli]
+        authorized: {type: boolean, example: true, description: 'False when the request was rejected by inbound auth (it is still captured)'}
+      required: [uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli, authorized]
       additionalProperties: false
 
     EventItem:
@@ -499,7 +504,8 @@ components:
           type: string
           example: 'https://example.com/path?query=string'
         captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
-      required: [seq, uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli]
+        authorized: {type: boolean, example: true, description: 'False when the request was rejected by inbound auth (it is still captured)'}
+      required: [seq, uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli, authorized]
       additionalProperties: false
 
     EventsResponse:

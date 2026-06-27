@@ -120,6 +120,37 @@ func TestHandler_DuplicateUserSlugReturns409_SQLite(t *testing.T) {
 	assert.True(t, errors.Is(err, shared.ErrConflict), "expected conflict, got %v", err)
 }
 
+func TestHandler_PersistsInboundAuth(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	h := session_create.New(db)
+
+	resp, err := h.Handle(ctx, openapi.CreateSessionRequest{
+		StatusCode:        200,
+		Slug:              strPtr("auth-create"),
+		InboundAuthHeader: strPtr("X-Webhook-Token"),
+		InboundAuthValue:  strPtr("super-secret"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Response.InboundAuthHeader)
+	assert.Equal(t, "X-Webhook-Token", *resp.Response.InboundAuthHeader)
+	require.NotNil(t, resp.Response.InboundAuthValue)
+	assert.Equal(t, "super-secret", *resp.Response.InboundAuthValue)
+
+	// persisted in storage
+	sess, gErr := db.GetSessionBySlug(ctx, "auth-create")
+	require.NoError(t, gErr)
+	assert.Equal(t, "X-Webhook-Token", sess.InboundAuthHeader)
+	assert.Equal(t, "super-secret", sess.InboundAuthValue)
+}
+
 func TestHandler_InvalidUserSlugReturnsBadRequest(t *testing.T) {
 	t.Parallel()
 
