@@ -40,6 +40,8 @@ const BASE_SESSION: Session = {
   securityHeaders: [],
   forwardUrl: null,
   longLived: false,
+  inboundAuthHeader: null,
+  inboundAuthValue: null,
 }
 
 const renderEditor = (session: Session = BASE_SESSION) =>

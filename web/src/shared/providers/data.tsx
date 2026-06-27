@@ -26,6 +26,10 @@ export type Session = {
   securityHeaders: Array<{ name: string; value: string }>
   forwardUrl: string | null
   longLived: boolean
+  /** Header name callers must include for auth; null = public endpoint. */
+  inboundAuthHeader: string | null
+  /** Expected secret value for the auth header; null = not set. */
+  inboundAuthValue: string | null
 }
 
 export type Request = {
@@ -36,6 +40,8 @@ export type Request = {
   url: URL
   get payload(): Promise<Uint8Array | null> | null // the payload is lazy-loaded to avoid memory overuse
   capturedAt: Date
+  /** False when the request was rejected by inbound auth. Undefined for WS-received events (schema omits it). */
+  authorized?: boolean
 }
 
 export type SessionEvents = {
@@ -61,6 +67,8 @@ type DataContext = {
     securityHeaders,
     forwardUrl,
     longLived,
+    inboundAuthHeader,
+    inboundAuthValue,
   }: {
     statusCode?: number
     headers?: Record<string, string>
@@ -72,6 +80,8 @@ type DataContext = {
     securityHeaders?: Array<{ name: string; value: string }>
     forwardUrl?: string
     longLived?: boolean
+    inboundAuthHeader?: string
+    inboundAuthValue?: string
   }): Promise<Readonly<Session>>
 
   /**
@@ -198,6 +208,8 @@ const dbSessionToState = (s: DbSession): Readonly<Session> =>
     securityHeaders: s.securityHeaders ?? [],
     forwardUrl: s.forwardUrl ?? null,
     longLived: s.longLived ?? false,
+    inboundAuthHeader: s.inboundAuthHeader ?? null,
+    inboundAuthValue: s.inboundAuthValue ?? null,
   })
 
 /** Helper function to get the request payload from the database (lazy-loaded) */
@@ -382,6 +394,8 @@ export const DataProvider: React.FC<{
       securityHeaders,
       forwardUrl,
       longLived,
+      inboundAuthHeader,
+      inboundAuthValue,
     }: {
       statusCode?: number
       headers?: Record<string, string>
@@ -393,6 +407,8 @@ export const DataProvider: React.FC<{
       securityHeaders?: Array<{ name: string; value: string }>
       forwardUrl?: string
       longLived?: boolean
+      inboundAuthHeader?: string
+      inboundAuthValue?: string
     }): Promise<Readonly<Session>> => {
       // save the session to the server
       const opts = await api.newSession({
@@ -406,6 +422,8 @@ export const DataProvider: React.FC<{
         securityHeaders,
         forwardUrl,
         longLived,
+        inboundAuthHeader,
+        inboundAuthValue,
       })
 
       // add the session ID to the list of all session IDs (update the state)
@@ -425,6 +443,8 @@ export const DataProvider: React.FC<{
         securityHeaders: [...opts.response.securityHeaders],
         forwardUrl: opts.response.forwardUrl,
         longLived: opts.response.longLived,
+        inboundAuthHeader: opts.response.inboundAuthHeader ?? undefined,
+        inboundAuthValue: opts.response.inboundAuthValue ?? undefined,
       }
 
       // save the session to the database
@@ -460,6 +480,7 @@ export const DataProvider: React.FC<{
               headers: [...r.headers],
               url: new URL(r.url),
               capturedAt: r.capturedAt,
+              authorized: r.authorized,
             })
           )
           .sort(requestsSorter)
@@ -481,6 +502,7 @@ export const DataProvider: React.FC<{
                 headers: [...r.headers],
                 url: r.url,
                 capturedAt: r.capturedAt,
+                authorized: r.authorized,
               })
             )
             .sort(requestsSorter)
@@ -497,6 +519,7 @@ export const DataProvider: React.FC<{
             capturedAt: r.capturedAt,
             headers: [...r.headers],
             payload: r.requestPayload,
+            authorized: r.authorized,
           }))
         )
 
@@ -656,6 +679,7 @@ export const DataProvider: React.FC<{
             headers: [...req.headers],
             url: new URL(req.url),
             capturedAt: req.capturedAt,
+            authorized: req.authorized,
             get payload() {
               return Promise.resolve(req.payload)
             },
@@ -682,6 +706,7 @@ export const DataProvider: React.FC<{
                     headers: [...serverReq.headers],
                     url: new URL(serverReq.url),
                     capturedAt: serverReq.capturedAt,
+                    authorized: serverReq.authorized,
                     get payload() {
                       return Promise.resolve(serverReq.requestPayload)
                     },
@@ -698,6 +723,7 @@ export const DataProvider: React.FC<{
               capturedAt: serverReq.capturedAt,
               headers: [...serverReq.headers],
               payload: serverReq.requestPayload,
+              authorized: serverReq.authorized,
             })
           } catch (err) {
             // if the request is not found on the server
@@ -728,6 +754,7 @@ export const DataProvider: React.FC<{
               headers: [...serverReq.headers],
               url: serverReq.url,
               capturedAt: serverReq.capturedAt,
+              authorized: serverReq.authorized,
               get payload() {
                 return Promise.resolve(serverReq.requestPayload)
               },
@@ -743,6 +770,7 @@ export const DataProvider: React.FC<{
             capturedAt: serverReq.capturedAt,
             headers: [...serverReq.headers],
             payload: serverReq.requestPayload,
+            authorized: serverReq.authorized,
           })
         }
       }
@@ -850,6 +878,8 @@ export const DataProvider: React.FC<{
         securityHeaders: [...opts.response.securityHeaders],
         forwardUrl: opts.response.forwardUrl,
         longLived: opts.response.longLived,
+        inboundAuthHeader: opts.response.inboundAuthHeader ?? undefined,
+        inboundAuthValue: opts.response.inboundAuthValue ?? undefined,
       }
 
       await db.putSession(dbRecord)

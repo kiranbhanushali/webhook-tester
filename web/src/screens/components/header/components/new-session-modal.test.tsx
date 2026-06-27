@@ -55,6 +55,8 @@ const MOCK_SESSION: Session = {
   securityHeaders: [],
   forwardUrl: null,
   longLived: false,
+  inboundAuthHeader: null,
+  inboundAuthValue: null,
 }
 
 const renderModal = () =>

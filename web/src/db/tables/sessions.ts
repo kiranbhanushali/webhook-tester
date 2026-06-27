@@ -15,6 +15,10 @@ export type Session = {
   securityHeaders?: Array<{ name: string; value: string }>
   forwardUrl?: string | null
   longLived?: boolean
+  /** Header name callers must include for inbound auth; absent = public endpoint. */
+  inboundAuthHeader?: string
+  /** Expected secret value for the inbound auth header. */
+  inboundAuthValue?: string
 }
 
 export type SessionsTable = Table<Session, string>

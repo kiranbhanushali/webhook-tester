@@ -9,6 +9,8 @@ export type Request = {
   url: string
   payload: Uint8Array | null
   capturedAt: Date
+  /** False when the request was rejected by inbound auth. Absent for WS-pushed requests until re-fetched from API. */
+  authorized?: boolean
 }
 
 export type RequestsTable = Table<Request, string>

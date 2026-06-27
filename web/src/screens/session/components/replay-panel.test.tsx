@@ -38,6 +38,8 @@ const BASE_SESSION: Session = {
   securityHeaders: [],
   forwardUrl: 'https://example.com/hook',
   longLived: false,
+  inboundAuthHeader: null,
+  inboundAuthValue: null,
 }
 
 const BASE_REQUEST = {
