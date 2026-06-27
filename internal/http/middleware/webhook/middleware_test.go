@@ -33,9 +33,25 @@ func newTestHandler(
 ) http.Handler {
 	t.Helper()
 
+	var h, _ = newTestHandlerWithPub(t, db, cfg, ext, hi)
+
+	return h
+}
+
+// newTestHandlerWithPub is like newTestHandler but also returns the shared pub/sub so a test can
+// subscribe (e.g. to the global firehose topic) and observe what the middleware publishes.
+func newTestHandlerWithPub(
+	t *testing.T,
+	db storage.Storage,
+	cfg *config.AppSettings,
+	ext *identifiers.Extractor,
+	hi *hotindex.HotIndex,
+) (http.Handler, pubsub.PubSub[pubsub.RequestEvent]) {
+	t.Helper()
+
 	var (
-		pub = pubsub.NewInMemory[pubsub.RequestEvent]()
-		mw  = webhook.New(context.Background(), zap.NewNop(), db, pub, cfg, ext, hi, time.Second)
+		ps = pubsub.NewInMemory[pubsub.RequestEvent]()
+		mw = webhook.New(context.Background(), zap.NewNop(), db, ps, cfg, ext, hi, time.Second)
 	)
 
 	var next = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -44,7 +60,25 @@ func newTestHandler(
 		_, _ = w.Write([]byte("passed-through"))
 	})
 
-	return mw(next)
+	return mw(next), ps
+}
+
+// recvFirehose waits (with a generous timeout) for the next event on the given firehose channel.
+// The middleware publishes asynchronously after ServeHTTP returns, so callers must subscribe BEFORE
+// issuing the capture and then call this to read the resulting event.
+func recvFirehose(t *testing.T, sub <-chan pubsub.RequestEvent) pubsub.RequestEvent {
+	t.Helper()
+
+	select {
+	case ev, ok := <-sub:
+		require.True(t, ok, "firehose channel closed before an event arrived")
+
+		return ev
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for a firehose event")
+
+		return pubsub.RequestEvent{}
+	}
 }
 
 func newMemDB(t *testing.T) storage.Storage {
@@ -546,6 +580,135 @@ func TestCapture_StatusOverrideInTail(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+// firehose (all-sessions cross-session stream) -------------------------------
+
+// (fh-1) capturing a webhook publishes a firehose event carrying the session slug + uuid and the
+// request summary (including authorized=true), so a single global subscriber can render it.
+func TestCapture_Firehose_PublishesSessionMetadataAndRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{Code: 200, ResponseBody: []byte("ok"), Slug: "fh-a"})
+	require.NoError(t, err)
+
+	var h, ps = newTestHandlerWithPub(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+
+	// subscribe to the GLOBAL firehose topic BEFORE the capture (in-memory pubsub only delivers
+	// to subscribers that already exist at publish time)
+	sub, unsub, err := ps.Subscribe(ctx, pubsub.FirehoseTopic)
+	require.NoError(t, err)
+
+	t.Cleanup(unsub)
+
+	var (
+		r = httptest.NewRequest(http.MethodPost, "/w/fh-a/path?q=1", strings.NewReader(`{"x":1}`))
+		w = httptest.NewRecorder()
+	)
+
+	h.ServeHTTP(w, r)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var ev = recvFirehose(t, sub)
+
+	require.Equal(t, pubsub.RequestActionCreate, ev.Action)
+	require.Equal(t, sID, ev.SessionUUID, "firehose event must carry the originating session uuid")
+	require.Equal(t, "fh-a", ev.SessionSlug, "firehose event must carry the originating session slug")
+
+	require.NotNil(t, ev.Request)
+	require.Equal(t, w.Header().Get("X-Wh-Request-Id"), ev.Request.ID)
+	require.Equal(t, http.MethodPost, ev.Request.Method)
+	require.Contains(t, ev.Request.URL, "/w/fh-a/path?q=1")
+	require.NotZero(t, ev.Request.CreatedAtUnixMilli)
+	require.True(t, ev.Request.Authorized, "a public-endpoint capture must be authorized=true on the firehose")
+}
+
+// (fh-2) a single firehose subscriber receives events from MULTIPLE sessions (cross-session).
+func TestCapture_Firehose_CrossSession(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	idA, err := db.NewSession(ctx, storage.Session{Code: 200, ResponseBody: []byte("a"), Slug: "fh-multi-a"})
+	require.NoError(t, err)
+
+	idB, err := db.NewSession(ctx, storage.Session{Code: 200, ResponseBody: []byte("b"), Slug: "fh-multi-b"})
+	require.NoError(t, err)
+
+	var h, ps = newTestHandlerWithPub(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+
+	sub, unsub, err := ps.Subscribe(ctx, pubsub.FirehoseTopic)
+	require.NoError(t, err)
+
+	t.Cleanup(unsub)
+
+	// capture on session A
+	var wA = httptest.NewRecorder()
+	h.ServeHTTP(wA, httptest.NewRequest(http.MethodPost, "/w/fh-multi-a", strings.NewReader(`{}`)))
+	require.Equal(t, http.StatusOK, wA.Code)
+
+	var evA = recvFirehose(t, sub)
+
+	// capture on session B
+	var wB = httptest.NewRecorder()
+	h.ServeHTTP(wB, httptest.NewRequest(http.MethodPost, "/w/fh-multi-b", strings.NewReader(`{}`)))
+	require.Equal(t, http.StatusOK, wB.Code)
+
+	var evB = recvFirehose(t, sub)
+
+	// both sessions reached the SAME single subscriber
+	var got = map[string]string{evA.SessionUUID: evA.SessionSlug, evB.SessionUUID: evB.SessionSlug}
+	require.Equal(t, map[string]string{idA: "fh-multi-a", idB: "fh-multi-b"}, got)
+}
+
+// (fh-3) an inbound-auth-FAILED capture still appears on the firehose, flagged authorized=false,
+// so the dashboard can surface rejected requests.
+func TestCapture_Firehose_UnauthorizedStillStreamed(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:              200,
+		Slug:              "fh-guarded",
+		InboundAuthHeader: inboundAuthHeader,
+		InboundAuthValue:  inboundAuthValue,
+	})
+	require.NoError(t, err)
+
+	var h, ps = newTestHandlerWithPub(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+
+	sub, unsub, err := ps.Subscribe(ctx, pubsub.FirehoseTopic)
+	require.NoError(t, err)
+
+	t.Cleanup(unsub)
+
+	// POST WITHOUT the required inbound-auth header → rejected (401) but still captured
+	var (
+		r = httptest.NewRequest(http.MethodPost, "/w/fh-guarded", strings.NewReader(`{}`))
+		w = httptest.NewRecorder()
+	)
+
+	h.ServeHTTP(w, r)
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	var ev = recvFirehose(t, sub)
+
+	require.Equal(t, sID, ev.SessionUUID)
+	require.Equal(t, "fh-guarded", ev.SessionSlug)
+	require.NotNil(t, ev.Request)
+	require.False(t, ev.Request.Authorized, "a rejected capture must be streamed with authorized=false")
 }
 
 // a numeric slug must NOT be misread as a status-code override (guards the ref boundary).

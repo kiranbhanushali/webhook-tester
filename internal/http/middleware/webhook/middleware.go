@@ -209,6 +209,27 @@ func New( //nolint:funlen,gocognit,gocyclo
 				}); err != nil {
 					log.Error("failed to publish a captured request", zap.Error(err))
 				}
+
+				// ALSO publish to the global firehose topic so a single cross-session subscriber sees
+				// every capture. The firehose event additionally carries the session slug+uuid and the
+				// authorized flag (the per-session event above is intentionally left unchanged). Only the
+				// "create" action is published cross-session; per-session delete/clear stay session-scoped.
+				if err := pub.Publish(appCtx, pubsub.FirehoseTopic, pubsub.RequestEvent{
+					Action:      pubsub.RequestActionCreate,
+					SessionUUID: sID,
+					SessionSlug: sess.Slug,
+					Request: &pubsub.Request{
+						ID:                 rID,
+						ClientAddr:         captured.ClientAddr,
+						Method:             captured.Method,
+						Headers:            headers,
+						URL:                captured.URL,
+						CreatedAtUnixMilli: captured.CreatedAtUnixMilli,
+						Authorized:         captured.Authorized,
+					},
+				}); err != nil {
+					log.Error("failed to publish a captured request to the firehose", zap.Error(err))
+				}
 			}()
 
 			// inbound auth failed: the request was captured above (flagged Authorized=false); answer
@@ -271,7 +292,7 @@ func New( //nolint:funlen,gocognit,gocyclo
 			w.WriteHeader(statusCode)
 
 			// write the response body
-			if _, err := w.Write(responseBody); err != nil { //nolint:gosec
+			if _, err := w.Write(responseBody); err != nil {
 				log.Error("failed to write the response body", zap.Error(err))
 			}
 		})

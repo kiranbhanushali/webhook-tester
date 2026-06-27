@@ -26,6 +26,12 @@ type (
 	RequestEvent struct {
 		Action  RequestAction `json:"action"`
 		Request *Request      `json:"request"`
+
+		// Session metadata is populated ONLY for events published to the global firehose topic
+		// (see FirehoseTopic); per-session events leave these empty. They let a cross-session
+		// subscriber attribute each event to its originating session without a storage lookup.
+		SessionUUID string `json:"session_uuid,omitempty"`
+		SessionSlug string `json:"session_slug,omitempty"`
 	}
 
 	Request struct {
@@ -35,6 +41,10 @@ type (
 		Headers            []HttpHeader `json:"headers"`
 		URL                string       `json:"url"`
 		CreatedAtUnixMilli int64        `json:"created_at_unix_milli"`
+
+		// Authorized is false when the request was rejected by inbound auth (it is still captured).
+		// It is carried on firehose events so a cross-session dashboard can flag rejected captures.
+		Authorized bool `json:"authorized,omitempty"`
 	}
 
 	HttpHeader struct {
@@ -50,3 +60,9 @@ const (
 	RequestActionDelete RequestAction = "delete" // delete a request
 	RequestActionClear  RequestAction = "clear"  // delete all requests
 )
+
+// FirehoseTopic is the single GLOBAL pub/sub topic that carries EVERY captured webhook event
+// across ALL sessions, in addition to the per-session topic (keyed by session UUID). It is a
+// reserved sentinel that can never collide with a session UUID, so the same PubSub instance (and
+// driver — in-memory or redis) serves both the per-session and the cross-session "firehose" feeds.
+const FirehoseTopic = "__firehose__"

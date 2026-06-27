@@ -183,6 +183,37 @@ paths:
         '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request
         '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
 
+  /api/firehose/subscribe:
+    get:
+      summary: Subscribe to ALL captured requests across ALL sessions (firehose) using WebSocket
+      description: >
+        Operator-only (gated by the same auth as the rest of /api/*). Streams a single live activity
+        feed of every captured webhook across all sessions. Each message carries the originating
+        session (slug + uuid) and a request summary including the inbound-auth `authorized` flag.
+        Only the `create` action is emitted cross-session; per-session delete/clear remain on the
+        per-session subscribe endpoint.
+      tags: [api]
+      operationId: apiFirehoseSubscribe
+      parameters:
+        - {$ref: '#/components/parameters/WebSocketRequestConnectionInHeader'}
+        - {$ref: '#/components/parameters/WebSocketRequestUpgradeInHeader'}
+        - {$ref: '#/components/parameters/WebSocketRequestSecKeyInHeader'}
+        - {$ref: '#/components/parameters/WebSocketRequestSecVersionInHeader'}
+      responses:
+        '101':
+          description: Switching Protocols
+          headers:
+            Connection: {$ref: '#/components/headers/WebSocketResponseConnection'}
+            Upgrade: {$ref: '#/components/headers/WebSocketResponseUpgrade'}
+            Sec-Websocket-Accept: {$ref: '#/components/headers/WebSocketResponseSecWebsocketAccept'}
+        '200':
+          description: WebSocket connection established
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FirehoseEvent'}
+        '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
   /api/session/{session_uuid}/requests/{request_uuid}:
     get:
       summary: Get captured request details by UUID for a session by UUID
@@ -546,6 +577,34 @@ components:
         url: {type: string, example: 'https://example.com/path?query=string'}
         captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
       required: [uuid, client_address, method, headers, url, captured_at_unix_milli]
+      additionalProperties: false
+
+    FirehoseEvent:
+      type: object
+      description: A single captured webhook event on the global, cross-session firehose stream
+      properties:
+        session_uuid: {$ref: '#/components/schemas/UUID'}
+        session_slug: {type: string, example: 'my-app', description: 'Human-readable slug of the session that captured the request'}
+        action:
+          type: string
+          enum: [create, delete, clear]
+          example: create
+          description: Cross-session feed currently emits only `create`; the others are reserved
+        request: {$ref: '#/components/schemas/FirehoseEventRequest'}
+      required: [session_uuid, session_slug, action]
+      additionalProperties: false
+
+    FirehoseEventRequest:
+      type: object
+      description: Request summary carried on a firehose event (enough to render a cross-session row)
+      properties:
+        uuid: {$ref: '#/components/schemas/UUID'}
+        client_address: {type: string, example: '214.184.32.7', description: 'May be IPv6 like 2a0e:4005:1002:ffff:185:40:4:132'}
+        method: {$ref: '#/components/schemas/HttpMethod'}
+        url: {type: string, example: 'https://example.com/path?query=string'}
+        captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+        authorized: {type: boolean, example: true, description: 'False when the request was rejected by inbound auth (it is still captured)'}
+      required: [uuid, client_address, method, url, captured_at_unix_milli, authorized]
       additionalProperties: false
 
   headers: # ------------------------------------------------ HEADERS -------------------------------------------------

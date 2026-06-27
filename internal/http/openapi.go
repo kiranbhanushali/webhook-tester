@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"gh.tarampamp.am/webhook-tester/v2/internal/config"
+	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/firehose_subscribe"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/live"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/ready"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/request_delete"
@@ -62,6 +63,7 @@ type OpenAPI struct {
 		requestsList       func(context.Context, sID) (*openapi.CapturedRequestsListResponse, error)
 		requestsDelete     func(context.Context, sID) (*openapi.SuccessfulOperationResponse, error)
 		requestsSubscribe  func(context.Context, http.ResponseWriter, *http.Request, sID) error
+		firehoseSubscribe  func(context.Context, http.ResponseWriter, *http.Request) error
 		requestGet         func(context.Context, sID, rID) (*openapi.CapturedRequestsResponse, error)
 		requestDelete      func(context.Context, sID, rID) (*openapi.SuccessfulOperationResponse, error)
 		requestReplay      func(context.Context, sID, rID, *openapi.ReplayRequest) (*openapi.ReplayResponse, error)
@@ -105,6 +107,7 @@ func NewOpenAPI(
 	si.handlers.requestsList = requests_list.New(db).Handle
 	si.handlers.requestsDelete = requests_delete_all.New(appCtx, db, pubSub).Handle
 	si.handlers.requestsSubscribe = requests_subscribe.New(db, pubSub).Handle
+	si.handlers.firehoseSubscribe = firehose_subscribe.New(pubSub).Handle
 	si.handlers.requestGet = request_get.New(db).Handle
 	si.handlers.requestDelete = request_delete.New(appCtx, db, pubSub).Handle
 	si.handlers.requestReplay = request_replay.New(db).Handle
@@ -288,6 +291,12 @@ func (o *OpenAPI) ApiSessionRequestsSubscribe(w http.ResponseWriter, r *http.Req
 		}
 
 		o.errorToJson(w, err, statusCode)
+	}
+}
+
+func (o *OpenAPI) ApiFirehoseSubscribe(w http.ResponseWriter, r *http.Request, _ openapi.ApiFirehoseSubscribeParams) {
+	if err := o.handlers.firehoseSubscribe(r.Context(), w, r); err != nil {
+		o.errorToJson(w, err, http.StatusInternalServerError)
 	}
 }
 

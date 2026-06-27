@@ -147,6 +147,7 @@ func TestServer_StartHTTP(t *testing.T) {
 			{http.MethodPatch, "/api/session/" + sID},
 			{http.MethodGet, "/api/session/" + sID + "/requests"},
 			{http.MethodGet, "/api/session/" + sID + "/requests/subscribe"},
+			{http.MethodGet, "/api/firehose/subscribe"},
 			{http.MethodGet, "/api/session/" + sID + "/requests/" + rID},
 			{http.MethodPost, "/api/session/" + sID + "/requests/" + rID + "/replay"},
 			{http.MethodGet, "/api/settings"},
@@ -209,6 +210,63 @@ func TestServer_PublicURLRoot(t *testing.T) {
 		require.Equal(t, http.StatusOK, status)
 		require.Contains(t, headers.Get("Content-Type"), "application/json")
 		require.Contains(t, string(body), `"public_url_root":"https://example.com"`)
+	})
+}
+
+// TestServer_FirehoseIsAuthGated proves the firehose WebSocket lives under /api/ and is therefore
+// gated by the shared-token auth middleware: with a token configured, an unauthenticated request to
+// /api/firehose/subscribe is rejected with 401 (not 404 — i.e. the route exists and is protected).
+func TestServer_FirehoseIsAuthGated(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		log = zap.NewNop()
+		srv = appHttp.NewServer(ctx, log)
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	srv.Register(
+		context.Background(),
+		log,
+		func(context.Context) error { return nil },
+		func(context.Context) (string, error) { return "v1.0.0", nil },
+		&config.AppSettings{AuthToken: "super-secret"}, // auth ENABLED
+		db,
+		pubsub.NewInMemory[pubsub.RequestEvent](),
+		nil, // extractor
+		nil, // hot index
+		time.Second,
+		false,
+	)
+
+	var baseUrl, stop = startServer(t, ctx, srv)
+
+	t.Cleanup(stop)
+
+	t.Run("no token ⇒ 401 (gated, route exists)", func(t *testing.T) {
+		t.Parallel()
+
+		var status, body, _ = sendRequest(t, http.MethodGet, baseUrl+"/api/firehose/subscribe")
+
+		require.Equal(t, http.StatusUnauthorized, status)
+		require.NotEqual(t, http.StatusNotFound, status, "route must be registered under /api/")
+		require.Contains(t, string(body), "unauthorized")
+	})
+
+	t.Run("valid bearer token passes the gate", func(t *testing.T) {
+		t.Parallel()
+
+		// With a valid token the auth gate is cleared; the request then reaches the WS handler
+		// wrapper, which (lacking the WebSocket upgrade headers) reports a 400 — NOT 401/404.
+		var status, _, _ = sendRequest(t, http.MethodGet, baseUrl+"/api/firehose/subscribe",
+			map[string]string{"Authorization": "Bearer super-secret"},
+		)
+
+		require.NotEqual(t, http.StatusUnauthorized, status)
+		require.NotEqual(t, http.StatusNotFound, status)
 	})
 }
 
