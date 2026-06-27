@@ -47,6 +47,20 @@ type (
 				sessionTTL  time.Duration // session TTL
 				maxRequests uint16        // maximal number of requests
 				fsDir       string        // path to the directory for local fs storage
+				sqlitePath  string        // path to the SQLite database file
+			}
+			auth struct {
+				token string // shared dashboard/API auth token (empty = disabled)
+			}
+			identifiers struct {
+				keys    []string // JSON body / query-param field names to index
+				headers []string // HTTP header names to index
+			}
+			response struct {
+				scriptTimeout time.Duration // max execution time for a response script
+			}
+			hotIndex struct {
+				window time.Duration // retention window for the in-memory hot index
 			}
 			pubSub struct {
 				driver string // Pub/Sub driver
@@ -71,9 +85,16 @@ type (
 )
 
 const (
-	pubSubDriverMemory, pubSubDriverRedis                    = "memory", "redis"
-	storageDriverMemory, storageDriverRedis, storageDriverFS = "memory", "redis", "fs"
-	tunnelDriverNgrok                                        = "ngrok"
+	pubSubDriverMemory, pubSubDriverRedis = "memory", "redis"
+
+	storageDriverMemory, storageDriverRedis = "memory", "redis"
+	storageDriverFS, storageDriverSQLite    = "fs", "sqlite"
+
+	tunnelDriverNgrok = "ngrok"
+
+	// default identifier keys extracted from request bodies / query params.
+	defaultIdentifierKeyTracking  = "trackingId"
+	defaultIdentifierKeyReference = "referenceId"
 )
 
 // NewCommand creates new `start` command.
@@ -147,8 +168,9 @@ func NewCommand(log *zap.Logger, defaultHttpPort uint16) *cli.Command { //nolint
 		}
 		storageDriverFlag = cli.StringFlag{
 			Name:  "storage-driver",
-			Value: storageDriverMemory,
+			Value: storageDriverSQLite,
 			Usage: "storage driver (" + strings.Join([]string{
+				storageDriverSQLite,
 				storageDriverMemory,
 				storageDriverRedis,
 				storageDriverFS,
@@ -158,12 +180,54 @@ func NewCommand(log *zap.Logger, defaultHttpPort uint16) *cli.Command { //nolint
 			Config:   cli.StringConfig{TrimSpace: true},
 			Validator: func(s string) error {
 				switch s {
-				case storageDriverMemory, storageDriverRedis, storageDriverFS:
+				case storageDriverSQLite, storageDriverMemory, storageDriverRedis, storageDriverFS:
 					return nil
 				default:
 					return fmt.Errorf("wrong storage driver [%s]", s)
 				}
 			},
+		}
+		sqlitePathFlag = cli.StringFlag{
+			Name:     "sqlite-path",
+			Usage:    "path to the SQLite database file (created if absent; used by the sqlite storage driver)",
+			Value:    "./webhook-tester.db",
+			Sources:  cli.EnvVars("SQLITE_PATH"),
+			OnlyOnce: true,
+			Config:   cli.StringConfig{TrimSpace: true},
+		}
+		authTokenFlag = cli.StringFlag{
+			Name:     "auth-token",
+			Usage:    "shared token protecting the dashboard and /api endpoints (empty disables auth)",
+			Sources:  cli.EnvVars("AUTH_TOKEN"),
+			OnlyOnce: true,
+			Config:   cli.StringConfig{TrimSpace: true},
+		}
+		identifierKeysFlag = cli.StringSliceFlag{
+			Name:    "identifier-keys",
+			Usage:   "JSON body field and query-param names to extract as searchable identifiers",
+			Value:   []string{defaultIdentifierKeyTracking, defaultIdentifierKeyReference},
+			Sources: cli.EnvVars("IDENTIFIER_KEYS"),
+		}
+		identifierHeadersFlag = cli.StringSliceFlag{
+			Name:    "identifier-headers",
+			Usage:   "HTTP header names to extract as searchable identifiers",
+			Sources: cli.EnvVars("IDENTIFIER_HEADERS"),
+		}
+		responseScriptTimeoutFlag = cli.DurationFlag{
+			Name:      "response-script-timeout",
+			Usage:     "maximum execution time for a session response (go-template) script",
+			Value:     time.Second,
+			Sources:   cli.EnvVars("RESPONSE_SCRIPT_TIMEOUT"),
+			OnlyOnce:  true,
+			Validator: validateDuration("response script timeout", time.Millisecond, time.Minute),
+		}
+		hotIndexWindowFlag = cli.DurationFlag{
+			Name:      "hot-index-window",
+			Usage:     "retention window for the in-memory identifier hot index (search fast path)",
+			Value:     time.Hour * 24 * 7, //nolint:mnd // 7 days
+			Sources:   cli.EnvVars("HOT_INDEX_WINDOW"),
+			OnlyOnce:  true,
+			Validator: validateDuration("hot index window", time.Minute, time.Hour*24*31), //nolint:mnd
 		}
 		storageSessionTTLFlag = cli.DurationFlag{
 			Name:      "session-ttl",
@@ -317,6 +381,12 @@ func NewCommand(log *zap.Logger, defaultHttpPort uint16) *cli.Command { //nolint
 			opt.storage.sessionTTL = c.Duration(storageSessionTTLFlag.Name)
 			opt.storage.maxRequests = uint16(c.Uint(storageMaxRequestsFlag.Name)) //nolint:gosec
 			opt.storage.fsDir = c.String(storageFsDirFlag.Name)
+			opt.storage.sqlitePath = c.String(sqlitePathFlag.Name)
+			opt.auth.token = c.String(authTokenFlag.Name)
+			opt.identifiers.keys = c.StringSlice(identifierKeysFlag.Name)
+			opt.identifiers.headers = c.StringSlice(identifierHeadersFlag.Name)
+			opt.response.scriptTimeout = c.Duration(responseScriptTimeoutFlag.Name)
+			opt.hotIndex.window = c.Duration(hotIndexWindowFlag.Name)
 			opt.maxRequestPayloadSize = uint32(c.Uint(maxRequestPayloadSizeFlag.Name)) //nolint:gosec
 			opt.autoCreateSessions = c.Bool(autoCreateSessionsFlag.Name)
 			opt.pubSub.driver = c.String(pubSubDriverFlag.Name)
@@ -345,6 +415,12 @@ func NewCommand(log *zap.Logger, defaultHttpPort uint16) *cli.Command { //nolint
 			&storageSessionTTLFlag,
 			&storageMaxRequestsFlag,
 			&storageFsDirFlag,
+			&sqlitePathFlag,
+			&authTokenFlag,
+			&identifierKeysFlag,
+			&identifierHeadersFlag,
+			&responseScriptTimeoutFlag,
+			&hotIndexWindowFlag,
 			&maxRequestPayloadSizeFlag,
 			&autoCreateSessionsFlag,
 			&pubSubDriverFlag,
@@ -430,10 +506,35 @@ func (cmd *command) Run(parentCtx context.Context, log *zap.Logger) error { //no
 		}
 	}
 
+	// Build the identifier extractor ONCE and share the SAME instance between the
+	// durable index (SQLite, via WithSQLiteExtractor) and the webhook middleware /
+	// in-memory hot index, so durable and in-memory paths extract identifiers
+	// identically. Query-param scanning is always enabled.
+	var extractor = identifiers.NewExtractor(
+		cmd.options.identifiers.keys,
+		cmd.options.identifiers.headers,
+		true,
+	)
+
 	var db storage.Storage
 
 	// create the storage
 	switch cmd.options.storage.driver {
+	case storageDriverSQLite:
+		var sq, sErr = storage.NewSQLite(
+			ctx,
+			"file:"+cmd.options.storage.sqlitePath,
+			cmd.options.storage.sessionTTL,
+			uint32(cmd.options.storage.maxRequests),
+			storage.WithSQLiteExtractor(extractor.Extract),
+		)
+		if sErr != nil {
+			return fmt.Errorf("failed to open sqlite storage [%s]: %w", cmd.options.storage.sqlitePath, sErr)
+		}
+
+		defer func() { _ = sq.Close() }()
+
+		db = sq
 	case storageDriverMemory:
 		var inMemory = storage.NewInMemory(cmd.options.storage.sessionTTL, uint32(cmd.options.storage.maxRequests)) //nolint:contextcheck,lll
 		defer func() { _ = inMemory.Close() }()
@@ -479,6 +580,7 @@ func (cmd *command) Run(parentCtx context.Context, log *zap.Logger) error { //no
 		MaxRequestBodySize: cmd.options.maxRequestPayloadSize,
 		SessionTTL:         cmd.options.storage.sessionTTL,
 		AutoCreateSessions: cmd.options.autoCreateSessions,
+		AuthToken:          cmd.options.auth.token,
 	}
 
 	// parse public URL root if provided
@@ -491,13 +593,13 @@ func (cmd *command) Run(parentCtx context.Context, log *zap.Logger) error { //no
 		appSettings.PublicURLRoot = parsedURL
 	}
 
-	// webhook-capture dependencies. These are sensible defaults for now; Task 10 replaces
-	// them with config-driven values (identifier allowlists, hot-index window, script timeout).
-	var (
-		webhookExtractor             = identifiers.NewExtractor([]string{"trackingId", "referenceId"}, nil, true)
-		webhookHotIndex              = hotindex.New(168 * time.Hour) //nolint:mnd // 7 days
-		webhookResponseScriptTimeout = time.Second
-	)
+	// in-memory hot index (search fast path), warm-started from durable storage so it
+	// is correct after a restart, and kept bounded by a background eviction janitor.
+	var hi = hotindex.New(cmd.options.hotIndex.window)
+
+	warmHotIndex(ctx, db, hi, cmd.options.hotIndex.window, log.Named("hotindex"))
+
+	go runHotIndexJanitor(ctx, hi, cmd.options.hotIndex.window)
 
 	// create HTTP server
 	var server = appHttp.NewServer(ctx, httpLog,
@@ -512,9 +614,9 @@ func (cmd *command) Run(parentCtx context.Context, log *zap.Logger) error { //no
 		&appSettings,
 		db,
 		pubSub,
-		webhookExtractor,
-		webhookHotIndex,
-		webhookResponseScriptTimeout,
+		extractor,
+		hi,
+		cmd.options.response.scriptTimeout,
 		cmd.options.frontend.useLive,
 	)
 
@@ -600,4 +702,87 @@ func (cmd *command) readinessChecker(rdc *redis.Client) func(ctx context.Context
 // latestAppVersionGetter returns a function to get the latest app version.
 func (cmd *command) latestAppVersionGetter() func(ctx context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) { return version.Latest(ctx) }
+}
+
+// recentIdentifierLister is the optional storage capability used to warm-start the
+// in-memory hot index from durable storage. Only the SQLite driver implements it;
+// drivers that do not are left to the (correct, slower) durable scan search path.
+type recentIdentifierLister interface {
+	ListRecentIdentifiers(context.Context, int64) ([]storage.IdentifierRef, error)
+}
+
+// buildHotIndexMap converts durable identifier rows into the composite-keyed map
+// expected by hotindex.Rebuild. The map key MUST be lower(key)+"\x00"+value to
+// mirror the hot index / SQLite normalization contract.
+func buildHotIndexMap(refs []storage.IdentifierRef) map[string][]hotindex.Ref {
+	var out = make(map[string][]hotindex.Ref, len(refs))
+
+	for _, r := range refs {
+		var k = strings.ToLower(r.Key) + "\x00" + r.Value
+
+		out[k] = append(out[k], hotindex.Ref{
+			SessionID:           r.SessionID,
+			SessionSlug:         r.SessionSlug,
+			RequestID:           r.RequestID,
+			CapturedAtUnixMilli: r.CapturedAtUnixMilli,
+		})
+	}
+
+	return out
+}
+
+// warmHotIndex back-fills the hot index from durable storage so identifier search is
+// correct immediately after a restart. When the driver lacks the capability the index
+// is intentionally left un-warmed: readers then fall back to the durable scan path.
+func warmHotIndex(
+	ctx context.Context,
+	db storage.Storage,
+	hi *hotindex.HotIndex,
+	window time.Duration,
+	log *zap.Logger,
+) {
+	lister, ok := db.(recentIdentifierLister)
+	if !ok {
+		log.Debug("storage driver has no recent-identifier capability; hot index left cold")
+
+		return
+	}
+
+	var cutoff = time.Now().Add(-window).UnixMilli()
+
+	refs, err := lister.ListRecentIdentifiers(ctx, cutoff)
+	if err != nil {
+		log.Warn("hot index warm-up failed; search falls back to the durable scan path", zap.Error(err))
+
+		return
+	}
+
+	hi.Rebuild(buildHotIndexMap(refs)) // also marks the index warmed
+
+	log.Debug("hot index warmed from durable storage", zap.Int("identifiers", len(refs)))
+}
+
+// runHotIndexJanitor periodically evicts hot-index entries older than the retention
+// window. It runs until ctx is canceled (on shutdown), so it does not leak.
+func runHotIndexJanitor(ctx context.Context, hi *hotindex.HotIndex, window time.Duration) {
+	var interval = window / 24 // sweep ~24x per window
+	if interval > time.Hour {
+		interval = time.Hour
+	}
+
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+
+	var t = time.NewTicker(interval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			hi.Evict(time.Now())
+		}
+	}
 }

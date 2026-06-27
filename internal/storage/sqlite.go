@@ -651,6 +651,49 @@ func (s *SQLite) SearchRequests(ctx context.Context, query IdentifierQuery) ([]R
 	return out, nil
 }
 
+// ListRecentIdentifiers returns identifier rows captured at or after sinceUnixMilli,
+// joined to their request and (non-expired) session, newest-first. It backs the
+// in-memory hot index warm-up performed at startup, so identifier search is correct
+// immediately after a process restart. The join to requests excludes identifiers
+// whose request has been evicted; the session predicate excludes expired sessions.
+func (s *SQLite) ListRecentIdentifiers(ctx context.Context, sinceUnixMilli int64) ([]IdentifierRef, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	const q = `SELECT ri."key", ri.value, ri.session_id, s.slug, ri.request_id, ri.created_at_ms ` +
+		`FROM request_identifiers ri ` +
+		`JOIN requests r ON r.id = ri.request_id ` +
+		`JOIN sessions s ON s.id = ri.session_id ` +
+		`WHERE ri.created_at_ms >= ? AND (s.long_lived = 1 OR s.expires_at_ms > ?) ` +
+		`ORDER BY ri.created_at_ms DESC`
+
+	rows, err := s.db.QueryContext(ctx, q, sinceUnixMilli, s.timeNow().UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("list recent identifiers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []IdentifierRef
+
+	for rows.Next() {
+		var ref IdentifierRef
+
+		if err = rows.Scan(&ref.Key, &ref.Value, &ref.SessionID, &ref.SessionSlug,
+			&ref.RequestID, &ref.CapturedAtUnixMilli); err != nil {
+			return nil, fmt.Errorf("scan identifier ref: %w", err)
+		}
+
+		out = append(out, ref)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate identifier refs: %w", err)
+	}
+
+	return out, nil
+}
+
 // buildSearchQuery assembles the parameterized SearchRequests statement and args.
 func buildSearchQuery(query IdentifierQuery, now int64) (string, []any) {
 	var (

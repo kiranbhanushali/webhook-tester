@@ -177,6 +177,20 @@ type (
 		Value               string
 		CapturedAtUnixMilli int64
 	}
+
+	// IdentifierRef is a single captured identifier joined to its session and request.
+	// It is a neutral storage-package type so the durable→hot-index warm-up path can
+	// be expressed without storage importing the hotindex package (avoiding a cycle):
+	// the CLI converts these refs into the hot index's composite-keyed map. Drivers
+	// that can serve a recent back-fill expose it via ListRecentIdentifiers.
+	IdentifierRef struct {
+		Key                 string
+		Value               string
+		SessionID           string
+		SessionSlug         string
+		RequestID           string
+		CapturedAtUnixMilli int64
+	}
 )
 
 const (

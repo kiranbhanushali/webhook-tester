@@ -546,3 +546,44 @@ func TestSQLite_RaceProvocation(t *testing.T) {
 		return impl
 	})
 }
+
+func TestSQLite_ListRecentIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		ft  = newFakeTime(t)
+		s   = newSQLite(t, 7*24*time.Hour, 128,
+			storage.WithSQLiteTimeNow(ft.Get),
+			storage.WithSQLiteExtractor(jsonStubExtractor),
+		)
+	)
+
+	sID, err := s.NewSession(ctx, storage.Session{Code: 200, Slug: "my-app"})
+	require.NoError(t, err)
+
+	captureT := ft.Get()
+
+	rID, err := s.NewRequest(ctx, sID, storage.Request{
+		Method: "POST",
+		Body:   []byte(`{"trackingId":"ABC123"}`),
+		URL:    "/my-app",
+	})
+	require.NoError(t, err)
+
+	// a cutoff one hour before the capture includes the identifier
+	refs, err := s.ListRecentIdentifiers(ctx, captureT.Add(-time.Hour).UnixMilli())
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	require.Equal(t, "trackingid", refs[0].Key) // normalized to lower-case
+	require.Equal(t, "ABC123", refs[0].Value)
+	require.Equal(t, sID, refs[0].SessionID)
+	require.Equal(t, "my-app", refs[0].SessionSlug)
+	require.Equal(t, rID, refs[0].RequestID)
+	require.Equal(t, captureT.UnixMilli(), refs[0].CapturedAtUnixMilli)
+
+	// a cutoff after the capture time excludes anything older than the window
+	none, err := s.ListRecentIdentifiers(ctx, captureT.Add(time.Hour).UnixMilli())
+	require.NoError(t, err)
+	require.Empty(t, none)
+}
