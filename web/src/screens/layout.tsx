@@ -13,6 +13,10 @@ export default function DefaultLayout({ api }: { api: Client }): React.JSX.Eleme
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const isDashboard = pathname === '/dashboard' || pathname.startsWith('/dashboard/')
+  // The per-session page is configuration-only now, so the request-list sidebar is dropped there too
+  // (event viewing moved to the dashboard). Both routes render full-width with no navbar.
+  const isSessionConfig = pathname.startsWith('/s/')
+  const hideNavbar = isDashboard || isSessionConfig
   const [scroll, scrollTo] = useWindowScroll()
   const [navBarIsOpened, navBarHandlers] = useDisclosure()
   const [currentVersion, setCurrentVersion] = useState<SemVer | null>(null)
@@ -60,7 +64,7 @@ export default function DefaultLayout({ api }: { api: Client }): React.JSX.Eleme
     <AppShell
       header={{ height: 70 }}
       navbar={
-        isDashboard
+        hideNavbar
           ? undefined
           : { width: 300, breakpoint: 'sm', collapsed: { mobile: !navBarIsOpened } }
       }
@@ -75,7 +79,7 @@ export default function DefaultLayout({ api }: { api: Client }): React.JSX.Eleme
         />
       </AppShell.Header>
 
-      {!isDashboard && (
+      {!hideNavbar && (
         <AppShell.Navbar p="md" pr={0} style={{ zIndex: 102 }} withBorder={false} onClick={handleNavbarClick}>
           {/* `grow` bounds the ScrollArea to the navbar height so the request list scrolls INSIDE it and
               the infinite-scroll sentinel is only intersected at the real bottom — not always visible

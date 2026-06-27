@@ -106,20 +106,34 @@ describe('SessionsListScreen', () => {
     expect(screen.getByText('session-gamma')).toBeInTheDocument()
   })
 
-  test('Open link for each row navigates to /s/{uuid}', async () => {
+  test('Config link for each row navigates to the uuid-based config page /s/{uuid}', async () => {
     renderScreen()
 
     await waitFor(() => {
       expect(screen.getByText('session-alpha')).toBeInTheDocument()
     })
 
-    // There should be an Open link pointing to the uuid-based session route for each row
-    const openLinks = screen.getAllByRole('link', { name: /^open$/i })
-    const hrefs = openLinks.map((el) => el.getAttribute('href'))
+    // Each row has a Config link pointing to the uuid-based session config route
+    const configLinks = screen.getAllByRole('link', { name: /^config$/i })
+    const hrefs = configLinks.map((el) => el.getAttribute('href'))
 
     expect(hrefs).toContain('/s/uuid-1111-1111-1111-111111111111')
     expect(hrefs).toContain('/s/uuid-2222-2222-2222-222222222222')
     expect(hrefs).toContain('/s/uuid-3333-3333-3333-333333333333')
+  })
+
+  test('Events link for each row opens the dashboard filtered to the session', async () => {
+    renderScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('session-alpha')).toBeInTheDocument()
+    })
+
+    const eventsLinks = screen.getAllByRole('link', { name: /^events$/i })
+    const hrefs = eventsLinks.map((el) => el.getAttribute('href'))
+
+    expect(hrefs).toContain('/dashboard?session=uuid-1111-1111-1111-111111111111')
+    expect(hrefs).toContain('/dashboard?session=uuid-3333-3333-3333-333333333333')
   })
 
   test('webhook URL column shows /w/{slug} for each session', async () => {

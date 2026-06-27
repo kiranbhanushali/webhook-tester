@@ -1,6 +1,6 @@
 import { Badge, Button, Divider, Group, Select, Skeleton, Table, Text, TextInput, Title } from '@mantine/core'
 import { notifications as notify } from '@mantine/notifications'
-import { IconList, IconSearch, IconTrash } from '@tabler/icons-react'
+import { IconEye, IconList, IconSearch, IconSettings, IconTrash } from '@tabler/icons-react'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import React, { useCallback, useEffect, useState } from 'react'
@@ -225,8 +225,19 @@ export function SessionsListScreen(): React.JSX.Element {
                           to={pathTo(RouteIDs.SessionAndRequest, session.uuid)}
                           size="xs"
                           variant="light"
+                          leftSection={<IconSettings size="0.9em" />}
                         >
-                          Open
+                          Config
+                        </Button>
+                        <Button
+                          component={Link}
+                          to={`${pathTo(RouteIDs.Dashboard)}?session=${encodeURIComponent(session.uuid)}`}
+                          size="xs"
+                          variant="light"
+                          color="teal"
+                          leftSection={<IconEye size="0.9em" />}
+                        >
+                          Events
                         </Button>
                         <Button
                           size="xs"
