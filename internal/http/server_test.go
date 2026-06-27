@@ -142,9 +142,13 @@ func TestServer_StartHTTP(t *testing.T) {
 		for i, params := range []struct{ method, url string }{ // order matters
 			{http.MethodPost, "/api/session"},
 			{http.MethodGet, "/api/session/" + sID},
+			{http.MethodGet, "/api/sessions"},
+			{http.MethodGet, "/api/search?value=anything"},
+			{http.MethodPatch, "/api/session/" + sID},
 			{http.MethodGet, "/api/session/" + sID + "/requests"},
 			{http.MethodGet, "/api/session/" + sID + "/requests/subscribe"},
 			{http.MethodGet, "/api/session/" + sID + "/requests/" + rID},
+			{http.MethodPost, "/api/session/" + sID + "/requests/" + rID + "/replay"},
 			{http.MethodGet, "/api/settings"},
 			{http.MethodGet, "/api/version"},
 			{http.MethodGet, "/api/version/latest"},

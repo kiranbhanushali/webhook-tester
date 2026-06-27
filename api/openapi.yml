@@ -30,7 +30,11 @@ paths:
         - name: group
           in: query
           required: false
-          schema: {type: string, description: Filter by group name}
+          schema: {type: string, description: Filter by group name (exact match)}
+        - name: q
+          in: query
+          required: false
+          schema: {type: string, description: Case-sensitive substring filter applied to id, slug and group name}
       responses:
         '200': {$ref: '#/components/responses/SessionsListResponse'}
         '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
@@ -41,10 +45,38 @@ paths:
       tags: [api]
       operationId: apiSearch
       parameters:
-        - name: q
+        - name: value
           in: query
           required: true
-          schema: {type: string, minLength: 1, description: Search query}
+          schema: {type: string, minLength: 1, description: Identifier value to match}
+        - name: key
+          in: query
+          required: false
+          schema: {type: string, description: Identifier key to match (empty matches any key)}
+        - name: match
+          in: query
+          required: false
+          schema: {type: string, enum: [exact, prefix], description: 'Value match mode (default: exact)'}
+        - name: group
+          in: query
+          required: false
+          schema: {type: string, description: Restrict to sessions in this group}
+        - name: session
+          in: query
+          required: false
+          schema: {type: string, description: Restrict to a single session (uuid or slug)}
+        - name: from
+          in: query
+          required: false
+          schema: {type: integer, x-go-type: int64, description: Lower bound on capture time (unix milliseconds)}
+        - name: to
+          in: query
+          required: false
+          schema: {type: integer, x-go-type: int64, description: Upper bound on capture time (unix milliseconds)}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, x-go-type: int, description: Maximum number of results to return}
       responses:
         '200': {$ref: '#/components/responses/SearchResponse'}
         '400': {$ref: '#/components/responses/ErrorResponse'} # Bad request

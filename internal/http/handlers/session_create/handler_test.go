@@ -1,0 +1,113 @@
+package session_create_test
+
+import (
+	"context"
+	"errors"
+	"regexp"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/session_create"
+	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/shared"
+	"gh.tarampamp.am/webhook-tester/v2/internal/http/openapi"
+	"gh.tarampamp.am/webhook-tester/v2/internal/storage"
+)
+
+var slugFormat = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,48}$`)
+
+func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+
+func TestHandler_AutoGeneratesValidSlug(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	h := session_create.New(db)
+
+	resp, err := h.Handle(ctx, openapi.CreateSessionRequest{
+		StatusCode:         200,
+		ResponseBodyBase64: "",
+		Group:              strPtr("team-a"),
+		ForwardUrl:         strPtr("https://example.com/hook"),
+		LongLived:          boolPtr(true),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Response.Slug)
+	assert.Truef(t, slugFormat.MatchString(*resp.Response.Slug), "auto slug %q invalid", *resp.Response.Slug)
+
+	require.NotNil(t, resp.Response.Group)
+	assert.Equal(t, "team-a", *resp.Response.Group)
+	require.NotNil(t, resp.Response.ForwardUrl)
+	assert.Equal(t, "https://example.com/hook", *resp.Response.ForwardUrl)
+	require.NotNil(t, resp.Response.LongLived)
+	assert.True(t, *resp.Response.LongLived)
+
+	// generated slug must resolve in storage
+	_, gErr := db.GetSessionBySlug(ctx, *resp.Response.Slug)
+	assert.NoError(t, gErr)
+}
+
+func TestHandler_AcceptsUserSlug(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	h := session_create.New(db)
+
+	resp, err := h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("my-custom-slug")})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Response.Slug)
+	assert.Equal(t, "my-custom-slug", *resp.Response.Slug)
+}
+
+func TestHandler_DuplicateUserSlugReturns409(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	h := session_create.New(db)
+
+	_, err := h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("dup")})
+	require.NoError(t, err)
+
+	_, err = h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("dup")})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, shared.ErrConflict), "expected conflict, got %v", err)
+}
+
+func TestHandler_InvalidUserSlugReturnsBadRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	h := session_create.New(db)
+
+	_, err := h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("Bad Slug!")})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, shared.ErrBadRequest), "expected bad request, got %v", err)
+}

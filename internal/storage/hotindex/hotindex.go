@@ -47,6 +47,11 @@ func New(window time.Duration) *HotIndex {
 	}
 }
 
+// Window returns the retention window the index was configured with. Callers
+// (e.g. the search handler) use it to decide whether a time-bounded query can be
+// satisfied from the hot index or must fall back to durable storage.
+func (h *HotIndex) Window() time.Duration { return h.window }
+
 // compositeKey builds the internal map key from an already-normalized (lower-case) key
 // and a value.
 func compositeKey(normKey, value string) string { return normKey + "\x00" + value }

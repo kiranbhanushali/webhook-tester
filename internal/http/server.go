@@ -75,9 +75,9 @@ func (s *Server) Register(
 	useLiveFrontend bool,
 ) *Server {
 	var (
-		oAPI    = NewOpenAPI(ctx, log, rdyChk, lastAppVer, cfg, db, pubSub) // OpenAPI server implementation
-		spa     = frontend.New(web.Dist(useLiveFrontend))                   // file server for SPA (also handles 404 errors)
-		mux     = http.NewServeMux()                                        // base router for the OpenAPI server
+		oAPI    = NewOpenAPI(ctx, log, rdyChk, lastAppVer, cfg, db, pubSub, hotIndex) // OpenAPI server implementation
+		spa     = frontend.New(web.Dist(useLiveFrontend))                             // SPA file server (also handles 404s)
+		mux     = http.NewServeMux()                                                  // base router for the OpenAPI server
 		handler = openapi.HandlerWithOptions(oAPI, openapi.StdHTTPServerOptions{
 			ErrorHandlerFunc: oAPI.HandleInternalError, // set error handler for internal server errors
 			BaseRouter:       mux,
