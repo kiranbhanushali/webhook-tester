@@ -6,6 +6,19 @@ import { Notifications } from '@mantine/notifications'
 import { MemoryRouter } from 'react-router-dom'
 import type { Session } from '~/shared'
 import type { SessionPatch } from '~/api'
+import { validateInboundAuth } from './session-validation'
+
+describe('validateInboundAuth', () => {
+  test.each([
+    { header: '', value: '', expected: true },
+    { header: '', value: 'anything', expected: true },
+    { header: 'X-Token', value: 'secret', expected: true },
+    { header: 'X-Token', value: '', expected: false },
+    { header: 'X-Token', value: '   ', expected: false },
+  ])('header=$header value=$value → $expected', ({ header, value, expected }) => {
+    expect(validateInboundAuth(header, value)).toBe(expected)
+  })
+})
 
 // Hoist mock functions so they are available in vi.mock factory
 const { mockUpdateSession } = vi.hoisted(() => ({

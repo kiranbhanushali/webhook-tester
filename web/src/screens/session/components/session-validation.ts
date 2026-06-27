@@ -49,6 +49,18 @@ export const headersTextToHeaders = (text: string): Array<{ name: string; value:
 export const headersToText = (headers: ReadonlyArray<{ name: string; value: string }>): string =>
   headers.map((h) => `${h.name}: ${h.value}`).join('\n')
 
+/**
+ * Validate inbound-auth: if a header name is provided, the value must also be non-empty.
+ * Both blank = public endpoint = valid.
+ */
+export const validateInboundAuth = (header: string, value: string): boolean => {
+  if (!header.trim()) {
+    return true // no auth header set → public endpoint → valid
+  }
+
+  return value.trim().length > 0 // header set, so value is required
+}
+
 /** Validate header text (one "Name: Value" per line). Empty text is valid. */
 export const validateHeadersText = (text: string): boolean => {
   if (!text.trim()) {
