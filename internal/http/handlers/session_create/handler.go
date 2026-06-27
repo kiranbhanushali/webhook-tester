@@ -31,6 +31,10 @@ func (h *Handler) Handle(ctx context.Context, p openapi.CreateSessionRequest) (*
 		return nil, fmt.Errorf("%w: cannot decode response body (wrong base64): %w", shared.ErrBadRequest, decErr)
 	}
 
+	if err := shared.ValidateInboundAuth(p.InboundAuthHeader, p.InboundAuthValue); err != nil {
+		return nil, err
+	}
+
 	sessionSlug, slugErr := h.resolveSlug(ctx, p.Slug)
 	if slugErr != nil {
 		return nil, slugErr

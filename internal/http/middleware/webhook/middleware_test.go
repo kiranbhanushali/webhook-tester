@@ -459,6 +459,72 @@ func TestCapture_NoInboundAuth_Authorized(t *testing.T) {
 	require.True(t, got.Authorized, "a request to a public endpoint must be authorized=true")
 }
 
+// (j) misconfigured at the storage layer: header set but the configured value is EMPTY. This
+// must FAIL CLOSED — a request that omits the header must NOT be authorized (the silent-bypass
+// regression: ConstantTimeCompare("","") used to return 1 → authorized).
+func TestCapture_InboundAuth_EmptyConfiguredValue_FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:              200,
+		Slug:              "misconfig",
+		InboundAuthHeader: inboundAuthHeader,
+		InboundAuthValue:  "", // empty value must never authorize a header-less request
+	})
+	require.NoError(t, err)
+
+	var (
+		h = newTestHandler(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+		r = httptest.NewRequest(http.MethodPost, "/w/misconfig", strings.NewReader(`{}`))
+		w = httptest.NewRecorder()
+	)
+
+	// the request OMITS the header entirely — must still be rejected
+	h.ServeHTTP(w, r)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code, "empty configured value must fail closed, not authorize")
+
+	got := onlyRequest(t, db, sID)
+	require.False(t, got.Authorized)
+}
+
+// (k) header + value configured, request presents an EMPTY header value → 401 (captured false).
+func TestCapture_InboundAuth_EmptyIncomingValue_401(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:              200,
+		Slug:              "guarded-empty",
+		InboundAuthHeader: inboundAuthHeader,
+		InboundAuthValue:  inboundAuthValue,
+	})
+	require.NoError(t, err)
+
+	var (
+		h = newTestHandler(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+		r = httptest.NewRequest(http.MethodPost, "/w/guarded-empty", strings.NewReader(`{}`))
+		w = httptest.NewRecorder()
+	)
+
+	r.Header.Set(inboundAuthHeader, "") // present but empty
+	h.ServeHTTP(w, r)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	got := onlyRequest(t, db, sID)
+	require.False(t, got.Authorized)
+}
+
 // status-code-from-URL-path override is scoped to segments AFTER /w/{ref}.
 func TestCapture_StatusOverrideInTail(t *testing.T) {
 	t.Parallel()

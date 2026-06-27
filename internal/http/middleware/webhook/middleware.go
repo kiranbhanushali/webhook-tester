@@ -404,12 +404,20 @@ func respondWithError(w http.ResponseWriter, log *zap.Logger, code int, msg stri
 // endpoint is public), so the request is always authorized. Otherwise the incoming header value
 // (looked up case-insensitively via http.Header.Get) must equal the configured value; the
 // comparison uses crypto/subtle.ConstantTimeCompare to avoid leaking the secret via timing.
+//
+// It FAILS CLOSED: when a header is configured, a missing/empty incoming value never authorizes.
+// This also guards a misconfigured session (header set, value empty) — without the guard a
+// header-less request would match ConstantTimeCompare("","")==1 and silently bypass auth; here
+// such a session rejects every request instead (the API also refuses to create that config).
 func inboundAuthorized(r *http.Request, sess *storage.Session) bool {
 	if sess.InboundAuthHeader == "" {
 		return true
 	}
 
 	var got = r.Header.Get(sess.InboundAuthHeader)
+	if got == "" {
+		return false
+	}
 
 	return subtle.ConstantTimeCompare([]byte(got), []byte(sess.InboundAuthValue)) == 1
 }

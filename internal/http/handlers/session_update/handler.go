@@ -115,6 +115,10 @@ func buildPatch(p openapi.UpdateSessionRequest) (storage.SessionPatch, error) {
 		patch.SecurityHeaders = &sh
 	}
 
+	if err := shared.ValidateInboundAuth(p.InboundAuthHeader, p.InboundAuthValue); err != nil {
+		return patch, err
+	}
+
 	if p.InboundAuthHeader != nil {
 		v := *p.InboundAuthHeader
 		patch.InboundAuthHeader = &v

@@ -151,6 +151,44 @@ func TestHandler_PersistsInboundAuth(t *testing.T) {
 	assert.Equal(t, "super-secret", sess.InboundAuthValue)
 }
 
+func TestHandler_InboundAuthHeaderWithoutValue_BadRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	h := session_create.New(db)
+
+	// header set but value omitted → 400
+	_, err := h.Handle(ctx, openapi.CreateSessionRequest{
+		StatusCode:        200,
+		InboundAuthHeader: strPtr("X-Webhook-Token"),
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, shared.ErrBadRequest), "expected bad request, got %v", err)
+
+	// header set but value explicitly empty → 400
+	_, err = h.Handle(ctx, openapi.CreateSessionRequest{
+		StatusCode:        200,
+		InboundAuthHeader: strPtr("X-Webhook-Token"),
+		InboundAuthValue:  strPtr(""),
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, shared.ErrBadRequest), "expected bad request, got %v", err)
+
+	// both empty (inbound auth disabled) → ok
+	_, err = h.Handle(ctx, openapi.CreateSessionRequest{
+		StatusCode:        200,
+		InboundAuthHeader: strPtr(""),
+		InboundAuthValue:  strPtr(""),
+	})
+	require.NoError(t, err)
+}
+
 func TestHandler_InvalidUserSlugReturnsBadRequest(t *testing.T) {
 	t.Parallel()
 

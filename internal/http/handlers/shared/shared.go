@@ -40,6 +40,23 @@ func ValidateSlug(s string) error {
 	return nil
 }
 
+// ValidateInboundAuth enforces that a non-empty inbound_auth_header is accompanied by a
+// non-empty inbound_auth_value. An empty value with a configured header would otherwise be a
+// foot-gun (the capture middleware fails closed and rejects every request), so it is refused
+// at the API boundary with ErrBadRequest. Both nil/empty (inbound auth disabled) is valid, and
+// supplying only a value with no header is harmless (auth stays disabled).
+func ValidateInboundAuth(header, value *string) error {
+	if header == nil || *header == "" {
+		return nil
+	}
+
+	if value == nil || *value == "" {
+		return fmt.Errorf("%w: inbound_auth_value required when inbound_auth_header is set", ErrBadRequest)
+	}
+
+	return nil
+}
+
 // ResolveSession resolves a slug-or-UUID reference to a session. It tries the
 // slug index first, then falls back to a UUID lookup. The returned Session has
 // its output-only ID field populated. If neither lookup succeeds, the UUID

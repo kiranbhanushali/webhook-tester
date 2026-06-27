@@ -104,6 +104,44 @@ func TestHandler_SetsAndClearsInboundAuth(t *testing.T) {
 	assert.Empty(t, sess.InboundAuthValue)
 }
 
+func TestHandler_InboundAuthHeaderWithoutValue_BadRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err := db.NewSession(ctx, storage.Session{Slug: "up-auth-bad"})
+	require.NoError(t, err)
+
+	h := session_update.New(db)
+
+	// header set but value omitted → 400
+	_, hErr := h.Handle(ctx, "up-auth-bad", openapi.UpdateSessionRequest{
+		InboundAuthHeader: strPtr("X-Token"),
+	})
+	require.Error(t, hErr)
+	assert.True(t, errors.Is(hErr, shared.ErrBadRequest), "expected bad request, got %v", hErr)
+
+	// header set but value explicitly empty → 400
+	_, hErr = h.Handle(ctx, "up-auth-bad", openapi.UpdateSessionRequest{
+		InboundAuthHeader: strPtr("X-Token"),
+		InboundAuthValue:  strPtr(""),
+	})
+	require.Error(t, hErr)
+	assert.True(t, errors.Is(hErr, shared.ErrBadRequest), "expected bad request, got %v", hErr)
+
+	// both empty (disable inbound auth) → ok
+	_, hErr = h.Handle(ctx, "up-auth-bad", openapi.UpdateSessionRequest{
+		InboundAuthHeader: strPtr(""),
+		InboundAuthValue:  strPtr(""),
+	})
+	require.NoError(t, hErr)
+}
+
 func TestHandler_SlugConflictReturns409(t *testing.T) {
 	t.Parallel()
 
