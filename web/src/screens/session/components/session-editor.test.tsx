@@ -67,6 +67,12 @@ const renderEditor = (session: Session = BASE_SESSION) =>
     </MantineProvider>
   )
 
+const SESSION_WITH_AUTH: Session = {
+  ...BASE_SESSION,
+  inboundAuthHeader: 'X-Webhook-Token',
+  inboundAuthValue: 'existing-secret',
+}
+
 describe('SessionEditor', () => {
   beforeEach(() => {
     mockUpdateSession.mockResolvedValue(BASE_SESSION)
@@ -134,7 +140,9 @@ describe('SessionEditor', () => {
       responseScript: '@status 200',
     })
 
-    fireEvent.change(screen.getByRole('textbox', { name: /forward/i }), { target: { value: '' } })
+    // Forward URL is in the collapsed Advanced panel — use hidden:true
+    fireEvent.change(screen.getByRole('textbox', { name: /forward/i, hidden: true }), { target: { value: '' } })
+    // Response script is in the open Response panel
     fireEvent.change(screen.getByRole('textbox', { name: /response script/i }), { target: { value: '' } })
 
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
@@ -196,5 +204,41 @@ describe('SessionEditor', () => {
     })
 
     expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled()
+  })
+
+  test('pre-fills inbound-auth header and value from session', () => {
+    renderEditor(SESSION_WITH_AUTH)
+    // Security panel is collapsed — use hidden:true to access its fields
+    const authHeaderInput = screen.getByRole('textbox', { name: /auth header/i, hidden: true }) as HTMLInputElement
+    expect(authHeaderInput.value).toBe('X-Webhook-Token')
+    const authValueInput = document.querySelector('input[type="password"]') as HTMLInputElement
+    expect(authValueInput.value).toBe('existing-secret')
+  })
+
+  test('header set without value disables Save button', () => {
+    renderEditor()
+    // Security panel is collapsed — use hidden:true
+    fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
+      target: { value: 'X-Token' },
+    })
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
+  })
+
+  test('calls updateSession with inboundAuthHeader + inboundAuthValue on save', async () => {
+    renderEditor()
+    // Security panel fields — use hidden:true
+    fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
+      target: { value: 'X-My-Token' },
+    })
+    fireEvent.change(document.querySelector('input[type="password"]') as HTMLInputElement, {
+      target: { value: 'my-value' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        'uuid-test',
+        expect.objectContaining({ inboundAuthHeader: 'X-My-Token', inboundAuthValue: 'my-value' })
+      )
+    })
   })
 })
