@@ -1,10 +1,24 @@
 import React, { useState, useMemo } from 'react'
-import { Button, Checkbox, Group, Modal, NumberInput, Space, Switch, Text, Textarea, TextInput } from '@mantine/core'
+import {
+  Accordion,
+  Button,
+  Checkbox,
+  Group,
+  Modal,
+  NumberInput,
+  PasswordInput,
+  Space,
+  Switch,
+  Text,
+  Textarea,
+  TextInput,
+} from '@mantine/core'
 import {
   IconCodeAsterisk,
   IconHeading,
   IconHourglassHigh,
   IconLink,
+  IconLock,
   IconTag,
   IconVersions,
 } from '@tabler/icons-react'
@@ -18,6 +32,7 @@ import {
   headersTextToHeaders,
   validateForwardUrl,
   validateHeadersText,
+  validateInboundAuth,
   validateSlug,
 } from '~/screens/session/components/session-validation'
 
@@ -90,6 +105,8 @@ export const NewSessionModal: React.FC<{
   const [longLived, setLongLived] = useState<boolean>(false)
   const [securityHeaders, setSecurityHeaders] = useState<string>('')
   const [responseScript, setResponseScript] = useState<string>('')
+  const [inboundAuthHeader, setInboundAuthHeader] = useState<string>('')
+  const [inboundAuthValue, setInboundAuthValue] = useState<string>('')
 
   // --- validation ---
   const wrongStatusCode = useMemo(() => !validate.code(status), [status])
@@ -108,7 +125,11 @@ export const NewSessionModal: React.FC<{
 
   const wrongSlug = useMemo(() => !validateSlug(slug), [slug])
   const wrongForwardUrl = useMemo(() => !validateForwardUrl(forwardUrl), [forwardUrl])
-  const wrongSecurityHeaders = useMemo(() => !validateHeadersText(securityHeaders), [securityHeaders]) // empty is fine
+  const wrongSecurityHeaders = useMemo(() => !validateHeadersText(securityHeaders), [securityHeaders])
+  const wrongInboundAuth = useMemo(
+    () => !validateInboundAuth(inboundAuthHeader, inboundAuthValue),
+    [inboundAuthHeader, inboundAuthValue]
+  )
 
   const createDisabled = useMemo(
     () =>
@@ -118,8 +139,18 @@ export const NewSessionModal: React.FC<{
       wrongResponseBody ||
       wrongSlug ||
       wrongForwardUrl ||
+      wrongSecurityHeaders ||
+      wrongInboundAuth,
+    [
+      wrongStatusCode,
+      wrongHeaders,
+      wrongDelay,
+      wrongResponseBody,
+      wrongSlug,
+      wrongForwardUrl,
       wrongSecurityHeaders,
-    [wrongStatusCode, wrongHeaders, wrongDelay, wrongResponseBody, wrongSlug, wrongForwardUrl, wrongSecurityHeaders]
+      wrongInboundAuth,
+    ]
   )
 
   /** Handle the creation of a new session */
@@ -154,6 +185,8 @@ export const NewSessionModal: React.FC<{
       securityHeaders: parsedSecurityHeaders.length > 0 ? parsedSecurityHeaders : undefined,
       forwardUrl: forwardUrl.trim() || undefined,
       longLived: longLived || undefined,
+      inboundAuthHeader: inboundAuthHeader.trim() || undefined,
+      inboundAuthValue: inboundAuthValue.trim() || undefined,
     })
       .then((opts) => {
         notify.update({
@@ -207,163 +240,193 @@ export const NewSessionModal: React.FC<{
       }
       centered
     >
-      <Text size="xs">
-        You have the ability to customize how your URL will respond by changing the status code, headers, response delay
-        and the content.
-      </Text>
+      <Text size="xs">Customise how your URL responds — status code, headers, body, and more.</Text>
       <Space h="sm" />
 
-      {/* ── Slug ─────────────────────────────────────────────────── */}
-      <TextInput
-        my="sm"
-        label="Slug"
-        description='Custom URL slug (leave blank to auto-generate). Pattern: [a-z0-9][a-z0-9-]{1,48}'
-        placeholder="my-webhook"
-        leftSection={<IconTag size="1em" />}
-        error={wrongSlug ? 'Slug must start with a lowercase letter or digit and contain only a-z, 0-9 and -' : undefined}
-        disabled={loading}
-        value={slug}
-        onChange={(e) => setSlug(e.currentTarget.value)}
-      />
+      <Accordion multiple defaultValue={['identity', 'response']} variant="separated">
+        {/* ── Identity ─────────────────────────────────── */}
+        <Accordion.Item value="identity">
+          <Accordion.Control>Identity</Accordion.Control>
+          <Accordion.Panel>
+            <TextInput
+              my="sm"
+              label="Slug"
+              description="Custom URL slug (leave blank to auto-generate). Pattern: [a-z0-9][a-z0-9-]{1,48}"
+              placeholder="my-webhook"
+              leftSection={<IconTag size="1em" />}
+              error={
+                wrongSlug
+                  ? 'Slug must start with a lowercase letter or digit and contain only a-z, 0-9 and -'
+                  : undefined
+              }
+              disabled={loading}
+              value={slug}
+              onChange={(e) => setSlug(e.currentTarget.value)}
+            />
+            <TextInput
+              my="sm"
+              label="Group"
+              description="Optional group name for organising sessions"
+              placeholder="team-a"
+              disabled={loading}
+              value={group}
+              onChange={(e) => setGroup(e.currentTarget.value)}
+            />
+          </Accordion.Panel>
+        </Accordion.Item>
 
-      {/* ── Group ────────────────────────────────────────────────── */}
-      <TextInput
-        my="sm"
-        label="Group"
-        description="Optional group name for organising sessions"
-        placeholder="team-a"
-        error={false}
-        disabled={loading}
-        value={group}
-        onChange={(e) => setGroup(e.currentTarget.value)}
-      />
+        {/* ── Response ─────────────────────────────────── */}
+        <Accordion.Item value="response">
+          <Accordion.Control>Response</Accordion.Control>
+          <Accordion.Panel>
+            <NumberInput
+              my="sm"
+              label="Default status code"
+              description="The default status code for the URL"
+              placeholder="200"
+              allowDecimal={false}
+              leftSection={<IconCodeAsterisk />}
+              min={controls.code.limits.min}
+              max={controls.code.limits.max}
+              error={wrongStatusCode}
+              disabled={loading}
+              value={status}
+              onChange={(v: string | number): void => setStatus(typeof v === 'string' ? parseInt(v, 10) : v)}
+            />
+            <Textarea
+              my="sm"
+              label="Response headers"
+              description={`The list of headers to include in the response (one per line, max ${controls.head.limits.maxCount})`}
+              placeholder={'Content-Type: application/json\nServer: WebhookTester\nX-Request-Id: 3C27:3A7ABF:250756C'}
+              leftSection={<IconHeading />}
+              styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
+              minRows={2}
+              maxRows={10}
+              error={wrongHeaders}
+              disabled={loading}
+              value={headers}
+              onChange={(e) => setHeaders(e.currentTarget.value)}
+              autosize
+            />
+            <Textarea
+              my="sm"
+              label="Response body"
+              description={`The content of the response${!!maxBodySize && maxBodySize > 0 ? ` (max ${new Intl.NumberFormat().format(maxBodySize)} characters)` : ''}`}
+              placeholder={'{"message": "Hello, World!"}'}
+              leftSection={<IconVersions />}
+              styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
+              minRows={1}
+              maxRows={15}
+              error={wrongResponseBody}
+              disabled={loading}
+              value={body}
+              onChange={(e) => setBody(e.currentTarget.value)}
+              autosize
+            />
+            <Textarea
+              my="sm"
+              label="Response script"
+              description={
+                <Group gap={4} align="center">
+                  <Text size="xs" component="span">
+                    Go text/template script for dynamic responses (optional)
+                  </Text>
+                  <ScriptHelpButton />
+                </Group>
+              }
+              placeholder={'@status 200\n{{ .Body }}'}
+              styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
+              minRows={2}
+              maxRows={15}
+              disabled={loading}
+              value={responseScript}
+              onChange={(e) => setResponseScript(e.currentTarget.value)}
+              autosize
+            />
+          </Accordion.Panel>
+        </Accordion.Item>
 
-      {/* ── Status code ──────────────────────────────────────────── */}
-      <NumberInput
-        my="sm"
-        label="Default status code"
-        description="The default status code for the URL"
-        placeholder="200"
-        allowDecimal={false}
-        leftSection={<IconCodeAsterisk />}
-        min={controls.code.limits.min}
-        max={controls.code.limits.max}
-        error={wrongStatusCode}
-        disabled={loading}
-        value={status}
-        onChange={(v: string | number): void => setStatus(typeof v === 'string' ? parseInt(v, 10) : v)}
-      />
+        {/* ── Security ─────────────────────────────────── */}
+        <Accordion.Item value="security">
+          <Accordion.Control>Security</Accordion.Control>
+          <Accordion.Panel>
+            <TextInput
+              my="sm"
+              label="Auth header name"
+              description="Require callers to send this header; leave blank for a public endpoint."
+              placeholder="X-Webhook-Token"
+              leftSection={<IconLock size="1em" />}
+              error={wrongInboundAuth ? 'Header is set — secret value is required' : undefined}
+              disabled={loading}
+              value={inboundAuthHeader}
+              onChange={(e) => setInboundAuthHeader(e.currentTarget.value)}
+            />
+            <PasswordInput
+              my="sm"
+              label="Auth secret value"
+              description="The expected secret value for the auth header."
+              placeholder="super-secret"
+              disabled={loading}
+              value={inboundAuthValue}
+              onChange={(e) => setInboundAuthValue(e.currentTarget.value)}
+            />
+            <Textarea
+              my="sm"
+              label="Security headers"
+              description={`Extra headers added to every response for this session (one per line, max ${HEADER_LIMITS.maxCount})`}
+              placeholder={'X-Frame-Options: DENY\nX-Content-Type-Options: nosniff'}
+              styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
+              minRows={2}
+              maxRows={8}
+              error={wrongSecurityHeaders}
+              disabled={loading}
+              value={securityHeaders}
+              onChange={(e) => setSecurityHeaders(e.currentTarget.value)}
+              autosize
+            />
+          </Accordion.Panel>
+        </Accordion.Item>
 
-      {/* ── Response headers ─────────────────────────────────────── */}
-      <Textarea
-        my="sm"
-        label="Response headers"
-        description={`The list of headers to include in the response (one per line, max ${controls.head.limits.maxCount})`}
-        placeholder={'Content-Type: application/json\nServer: WebhookTester\nX-Request-Id: 3C27:3A7ABF:250756C'}
-        leftSection={<IconHeading />}
-        styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
-        minRows={2}
-        maxRows={10}
-        error={wrongHeaders}
-        disabled={loading}
-        value={headers}
-        onChange={(e) => setHeaders(e.currentTarget.value)}
-        autosize
-      />
-
-      {/* ── Response delay ───────────────────────────────────────── */}
-      <NumberInput
-        my="sm"
-        label="Response delay"
-        description="The delay in seconds before the response is sent"
-        placeholder="0"
-        allowDecimal={false}
-        leftSection={<IconHourglassHigh />}
-        min={controls.delay.limits.min}
-        max={controls.delay.limits.max}
-        error={wrongDelay}
-        disabled={loading}
-        value={delay}
-        onChange={(v: string | number): void => setDelay(typeof v === 'string' ? parseInt(v, 10) : v)}
-      />
-
-      {/* ── Response body ─────────────────────────────────────────── */}
-      <Textarea
-        my="sm"
-        label="Response body"
-        description={`The content of the response${!!maxBodySize && maxBodySize > 0 && ` (max ${new Intl.NumberFormat().format(maxBodySize)} characters)`}`}
-        placeholder={'{"message": "Hello, World!"}'}
-        leftSection={<IconVersions />}
-        styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
-        minRows={1}
-        maxRows={15}
-        error={wrongResponseBody}
-        disabled={loading}
-        value={body}
-        onChange={(e) => setBody(e.currentTarget.value)}
-        autosize
-      />
-
-      {/* ── Security headers ─────────────────────────────────────── */}
-      <Textarea
-        my="sm"
-        label="Security headers"
-        description={`Extra headers added to every response for this session (one per line, max ${HEADER_LIMITS.maxCount})`}
-        placeholder={'X-Frame-Options: DENY\nX-Content-Type-Options: nosniff'}
-        styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
-        minRows={2}
-        maxRows={8}
-        error={wrongSecurityHeaders}
-        disabled={loading}
-        value={securityHeaders}
-        onChange={(e) => setSecurityHeaders(e.currentTarget.value)}
-        autosize
-      />
-
-      {/* ── Forward URL ──────────────────────────────────────────── */}
-      <TextInput
-        my="sm"
-        label="Forward URL"
-        description="Forward incoming requests to this URL (optional)"
-        placeholder="https://example.com/webhook"
-        leftSection={<IconLink size="1em" />}
-        error={wrongForwardUrl ? 'Must be a valid http:// or https:// URL' : undefined}
-        disabled={loading}
-        value={forwardUrl}
-        onChange={(e) => setForwardUrl(e.currentTarget.value)}
-      />
-
-      {/* ── Response script ──────────────────────────────────────── */}
-      <Textarea
-        my="sm"
-        label="Response script"
-        description={
-          <Group gap={4} align="center">
-            <Text size="xs" component="span">
-              Go text/template script for dynamic responses (optional)
-            </Text>
-            <ScriptHelpButton />
-          </Group>
-        }
-        placeholder={'@status 200\n{{ .Body }}'}
-        styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
-        minRows={2}
-        maxRows={15}
-        disabled={loading}
-        value={responseScript}
-        onChange={(e) => setResponseScript(e.currentTarget.value)}
-        autosize
-      />
-
-      {/* ── Long-lived ───────────────────────────────────────────── */}
-      <Switch
-        my="sm"
-        label="Long-lived session"
-        description="If enabled, the session does not expire on the normal TTL"
-        disabled={loading}
-        checked={longLived}
-        onChange={(e) => setLongLived(e.currentTarget.checked)}
-      />
+        {/* ── Advanced ─────────────────────────────────── */}
+        <Accordion.Item value="advanced">
+          <Accordion.Control>Advanced</Accordion.Control>
+          <Accordion.Panel>
+            <NumberInput
+              my="sm"
+              label="Response delay"
+              description="The delay in seconds before the response is sent"
+              placeholder="0"
+              allowDecimal={false}
+              leftSection={<IconHourglassHigh />}
+              min={controls.delay.limits.min}
+              max={controls.delay.limits.max}
+              error={wrongDelay}
+              disabled={loading}
+              value={delay}
+              onChange={(v: string | number): void => setDelay(typeof v === 'string' ? parseInt(v, 10) : v)}
+            />
+            <TextInput
+              my="sm"
+              label="Forward URL"
+              description="Forward incoming requests to this URL (optional)"
+              placeholder="https://example.com/webhook"
+              leftSection={<IconLink size="1em" />}
+              error={wrongForwardUrl ? 'Must be a valid http:// or https:// URL' : undefined}
+              disabled={loading}
+              value={forwardUrl}
+              onChange={(e) => setForwardUrl(e.currentTarget.value)}
+            />
+            <Switch
+              my="sm"
+              label="Long-lived session"
+              description="If enabled, the session does not expire on the normal TTL"
+              disabled={loading}
+              checked={longLived}
+              onChange={(e) => setLongLived(e.currentTarget.checked)}
+            />
+          </Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>
 
       <Group mt="xl" justify="space-between">
         <Checkbox

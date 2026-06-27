@@ -20,6 +20,8 @@ const { mockNewSession, mockDestroySession } = vi.hoisted(() => ({
       securityHeaders?: Array<{ name: string; value: string }>
       forwardUrl?: string
       longLived?: boolean
+      inboundAuthHeader?: string
+      inboundAuthValue?: string
     }) => Promise<Session>
   >(),
   mockDestroySession: vi.fn<() => Promise<() => Promise<void>>>(),
@@ -83,39 +85,42 @@ describe('NewSessionModal — new fields', () => {
   test('renders slug, group, forward-url, long-lived, security headers and response script fields', () => {
     renderModal()
 
+    // Identity + Response panels are open by default
     expect(screen.getByRole('textbox', { name: /slug/i })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: /group/i })).toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: /forward/i })).toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: /long.?lived/i })).toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: /security headers/i })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: /response script/i })).toBeInTheDocument()
+
+    // Security and Advanced panels are collapsed by default — use hidden:true to verify fields exist in DOM
+    expect(screen.getByRole('textbox', { name: /security headers/i, hidden: true })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /forward/i, hidden: true })).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: /long.?lived/i, hidden: true })).toBeInTheDocument()
   })
 
   test('submits slug, group, longLived, securityHeaders and responseScript to newSession', async () => {
     renderModal()
 
-    // Fill in slug
+    // Fill in slug (Identity panel — open by default)
     fireEvent.change(screen.getByRole('textbox', { name: /slug/i }), {
       target: { value: 'my-slug' },
     })
 
-    // Fill in group
+    // Fill in group (Identity panel — open by default)
     fireEvent.change(screen.getByRole('textbox', { name: /group/i }), {
       target: { value: 'team-a' },
     })
 
-    // Fill in security headers
-    fireEvent.change(screen.getByRole('textbox', { name: /security headers/i }), {
-      target: { value: 'X-Frame-Options: DENY' },
-    })
-
-    // Fill in response script
+    // Fill in response script (Response panel — open by default)
     fireEvent.change(screen.getByRole('textbox', { name: /response script/i }), {
       target: { value: '{{ .Body }}' },
     })
 
-    // Toggle long-lived switch (Mantine v8 Switch renders role="switch")
-    fireEvent.click(screen.getByRole('switch', { name: /long.?lived/i }))
+    // Security + Advanced panels are collapsed — use hidden:true to interact with their fields
+    fireEvent.change(screen.getByRole('textbox', { name: /security headers/i, hidden: true }), {
+      target: { value: 'X-Frame-Options: DENY' },
+    })
+
+    // Toggle long-lived switch in the collapsed Advanced panel
+    fireEvent.click(screen.getByRole('switch', { name: /long.?lived/i, hidden: true }))
 
     // Click Create
     fireEvent.click(screen.getByRole('button', { name: /create/i }))
@@ -163,8 +168,8 @@ describe('NewSessionModal — new fields', () => {
 
   test('invalid forward URL disables Create button', () => {
     renderModal()
-
-    fireEvent.change(screen.getByRole('textbox', { name: /forward/i }), {
+    // Advanced panel is collapsed — use hidden:true to interact with the forward URL field
+    fireEvent.change(screen.getByRole('textbox', { name: /forward/i, hidden: true }), {
       target: { value: 'not-a-url' },
     })
 
@@ -173,8 +178,8 @@ describe('NewSessionModal — new fields', () => {
 
   test('valid forward URL does not disable Create button', () => {
     renderModal()
-
-    fireEvent.change(screen.getByRole('textbox', { name: /forward/i }), {
+    // Advanced panel is collapsed — use hidden:true
+    fireEvent.change(screen.getByRole('textbox', { name: /forward/i, hidden: true }), {
       target: { value: 'https://example.com/hook' },
     })
 
@@ -186,5 +191,57 @@ describe('NewSessionModal — new fields', () => {
 
     // Leave forward URL blank
     expect(screen.getByRole('button', { name: /create/i })).not.toBeDisabled()
+  })
+
+  test('renders inbound-auth-header input in the Security section (in DOM even when collapsed)', () => {
+    renderModal()
+    // Security panel is collapsed by default; the field is in DOM but hidden via accordion
+    expect(screen.getByRole('textbox', { name: /auth header/i, hidden: true })).toBeInTheDocument()
+  })
+
+  test('header set without value disables Create button', () => {
+    renderModal()
+    // Security panel is collapsed — interact via hidden:true
+    fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
+      target: { value: 'X-Webhook-Token' },
+    })
+    expect(screen.getByRole('button', { name: /create/i })).toBeDisabled()
+  })
+
+  test('header + value both set does not disable Create button', () => {
+    renderModal()
+    // Security panel fields — interact via hidden:true
+    fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
+      target: { value: 'X-Webhook-Token' },
+    })
+    const pwInput = document.querySelector('input[type="password"]') as HTMLInputElement
+    fireEvent.change(pwInput, { target: { value: 'super-secret' } })
+    expect(screen.getByRole('button', { name: /create/i })).not.toBeDisabled()
+  })
+
+  test('submits inboundAuthHeader + inboundAuthValue to newSession', async () => {
+    renderModal()
+    // Security panel fields — interact via hidden:true
+    fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
+      target: { value: 'X-Webhook-Token' },
+    })
+    const pwInput = document.querySelector('input[type="password"]') as HTMLInputElement
+    fireEvent.change(pwInput, { target: { value: 'my-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: /create/i }))
+    await waitFor(() => {
+      expect(mockNewSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inboundAuthHeader: 'X-Webhook-Token',
+          inboundAuthValue: 'my-secret',
+        })
+      )
+    })
+  })
+
+  test('Identity section shows slug and group inputs by default (open)', () => {
+    renderModal()
+    // Accordion 'identity' is open by default — slug and group visible without clicking
+    expect(screen.getByRole('textbox', { name: /slug/i })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /group/i })).toBeInTheDocument()
   })
 })
