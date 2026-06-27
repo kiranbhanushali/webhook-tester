@@ -357,3 +357,127 @@ describe('replayRequest', () => {
     expect(String(fetchMock.callHistory.lastCall()?.options?.body ?? '')).not.toContain('target_url')
   })
 })
+
+describe('newSession — inbound-auth fields', () => {
+  test('decodes inbound_auth_header and inbound_auth_value from response', async () => {
+    fetchMock.postOnce(/\/api\/session$/, {
+      status: 200,
+      body: {
+        uuid: 'uuid-inbound',
+        created_at_unix_milli: 0,
+        response: {
+          status_code: 200,
+          headers: [],
+          delay: 0,
+          response_body_base64: '',
+          inbound_auth_header: 'X-Webhook-Token',
+          inbound_auth_value: 'super-secret',
+        },
+      },
+    })
+    const s = await new Client({ baseUrl }).newSession({
+      inboundAuthHeader: 'X-Webhook-Token',
+      inboundAuthValue: 'super-secret',
+    })
+    expect(s.response.inboundAuthHeader).toBe('X-Webhook-Token')
+    expect(s.response.inboundAuthValue).toBe('super-secret')
+  })
+
+  test('maps null/absent inbound_auth fields to null', async () => {
+    fetchMock.postOnce(/\/api\/session$/, {
+      status: 200,
+      body: {
+        uuid: 'uuid-no-auth',
+        created_at_unix_milli: 0,
+        response: { status_code: 200, headers: [], delay: 0, response_body_base64: '' },
+      },
+    })
+    const s = await new Client({ baseUrl }).newSession({})
+    expect(s.response.inboundAuthHeader).toBeNull()
+    expect(s.response.inboundAuthValue).toBeNull()
+  })
+})
+
+describe('getSessionRequests — authorized field', () => {
+  test('maps authorized:true', async () => {
+    fetchMock.getOnce(/\/api\/session\/s1\/requests$/, {
+      status: 200,
+      body: [{
+        uuid: 'r1',
+        client_address: '1.2.3.4',
+        method: 'POST',
+        request_payload_base64: '',
+        headers: [],
+        url: 'http://localhost/s1',
+        captured_at_unix_milli: 0,
+        authorized: true,
+      }],
+    })
+    const reqs = await new Client({ baseUrl }).getSessionRequests('s1')
+    expect(reqs[0].authorized).toBe(true)
+  })
+
+  test('maps authorized:false', async () => {
+    fetchMock.getOnce(/\/api\/session\/s2\/requests$/, {
+      status: 200,
+      body: [{
+        uuid: 'r2',
+        client_address: '1.2.3.4',
+        method: 'POST',
+        request_payload_base64: '',
+        headers: [],
+        url: 'http://localhost/s2',
+        captured_at_unix_milli: 0,
+        authorized: false,
+      }],
+    })
+    const reqs = await new Client({ baseUrl }).getSessionRequests('s2')
+    expect(reqs[0].authorized).toBe(false)
+  })
+})
+
+describe('getSessionRequest (single) — authorized field', () => {
+  test('maps authorized field on single request fetch', async () => {
+    fetchMock.getOnce(/\/api\/session\/s3\/requests\/r3$/, {
+      status: 200,
+      body: {
+        uuid: 'r3',
+        client_address: '1.2.3.4',
+        method: 'GET',
+        request_payload_base64: '',
+        headers: [],
+        url: 'http://localhost/s3',
+        captured_at_unix_milli: 0,
+        authorized: false,
+      },
+    })
+    const req = await new Client({ baseUrl }).getSessionRequest('s3', 'r3')
+    expect(req.authorized).toBe(false)
+  })
+})
+
+describe('updateSession — inbound-auth fields', () => {
+  test('sends inbound_auth_header and inbound_auth_value in patch', async () => {
+    fetchMock.patchOnce(/\/api\/session\/sid1$/, {
+      status: 200,
+      body: {
+        uuid: 'sid1',
+        created_at_unix_milli: 0,
+        response: {
+          status_code: 200,
+          headers: [],
+          delay: 0,
+          response_body_base64: '',
+          inbound_auth_header: 'X-Token',
+          inbound_auth_value: 'abc',
+        },
+      },
+    })
+    const s = await new Client({ baseUrl }).updateSession('sid1', {
+      inboundAuthHeader: 'X-Token',
+      inboundAuthValue: 'abc',
+    })
+    expect(s.response.inboundAuthHeader).toBe('X-Token')
+    expect(s.response.inboundAuthValue).toBe('abc')
+  })
+})

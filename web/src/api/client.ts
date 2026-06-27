@@ -29,6 +29,8 @@ type SessionOptionsData = {
     security_headers?: ArrayLike<Header>
     forward_url?: string
     long_lived?: boolean
+    inbound_auth_header?: string
+    inbound_auth_value?: string
   }
   created_at_unix_milli: number
   expires_at_unix_milli?: number
@@ -64,6 +66,8 @@ type SessionOptions = Readonly<{
     securityHeaders: ReadonlyArray<Header>
     forwardUrl: string | null
     longLived: boolean
+    inboundAuthHeader: string | null
+    inboundAuthValue: string | null
   }>
   createdAt: Readonly<Date>
   expiresAt: Readonly<Date> | null
@@ -111,6 +115,8 @@ export type SessionPatch = Readonly<{
   securityHeaders?: ReadonlyArray<Header>
   forwardUrl?: string
   longLived?: boolean
+  inboundAuthHeader?: string
+  inboundAuthValue?: string
 }>
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS' | 'CONNECT' | 'TRACE' | string
@@ -123,6 +129,7 @@ type CapturedRequest = Readonly<{
   headers: ReadonlyArray<{ name: string; value: string }>
   url: Readonly<URL>
   capturedAt: Readonly<Date>
+  authorized: boolean
 }>
 
 type RequestEvent = Readonly<{
@@ -191,6 +198,8 @@ export class Client {
         ),
         forwardUrl: data.response.forward_url ?? null,
         longLived: data.response.long_lived ?? false,
+        inboundAuthHeader: data.response.inbound_auth_header ?? null,
+        inboundAuthValue: data.response.inbound_auth_value ?? null,
       }),
       createdAt: Object.freeze(new Date(data.created_at_unix_milli)),
       expiresAt: data.expires_at_unix_milli ? Object.freeze(new Date(data.expires_at_unix_milli)) : null,
@@ -329,6 +338,8 @@ export class Client {
     securityHeaders,
     forwardUrl,
     longLived,
+    inboundAuthHeader,
+    inboundAuthValue,
   }: {
     statusCode?: number
     headers?: Record<string, string>
@@ -340,6 +351,8 @@ export class Client {
     securityHeaders?: ReadonlyArray<Readonly<{ name: string; value: string }>>
     forwardUrl?: string
     longLived?: boolean
+    inboundAuthHeader?: string
+    inboundAuthValue?: string
   }): Promise<SessionOptions> {
     const body: {
       status_code: number
@@ -352,6 +365,8 @@ export class Client {
       security_headers?: Array<{ name: string; value: string }>
       forward_url?: string
       long_lived?: boolean
+      inbound_auth_header?: string
+      inbound_auth_value?: string
     } = {
       status_code: Math.min(Math.max(100, statusCode), 530),
       headers: Object.entries(headers)
@@ -383,6 +398,14 @@ export class Client {
 
     if (longLived !== undefined) {
       body.long_lived = longLived
+    }
+
+    if (inboundAuthHeader !== undefined) {
+      body.inbound_auth_header = inboundAuthHeader
+    }
+
+    if (inboundAuthValue !== undefined) {
+      body.inbound_auth_value = inboundAuthValue
     }
 
     const { data, response } = await this.api.POST('/api/session', { body })
@@ -546,6 +569,8 @@ export class Client {
       security_headers?: Array<Header>
       forward_url?: string
       long_lived?: boolean
+      inbound_auth_header?: string
+      inbound_auth_value?: string
     } = {}
 
     if (typeof patch.statusCode === 'number') {
@@ -586,6 +611,14 @@ export class Client {
 
     if (patch.longLived !== undefined) {
       body.long_lived = patch.longLived
+    }
+
+    if (patch.inboundAuthHeader !== undefined) {
+      body.inbound_auth_header = patch.inboundAuthHeader
+    }
+
+    if (patch.inboundAuthValue !== undefined) {
+      body.inbound_auth_value = patch.inboundAuthValue
     }
 
     const { data, response } = await this.api.PATCH('/api/session/{session_uuid}', {
@@ -692,6 +725,7 @@ export class Client {
               headers: Object.freeze(Array.from(req.headers).map(({ name, value }) => Object.freeze({ name, value }))),
               url: Object.freeze(new URL(req.url)),
               capturedAt: Object.freeze(new Date(req.captured_at_unix_milli)),
+              authorized: req.authorized,
             })
           )
           // sort the list by capturedAt date, to have the latest requests first
@@ -814,6 +848,7 @@ export class Client {
         headers: Object.freeze(Array.from(data.headers)),
         url: Object.freeze(new URL(data.url)),
         capturedAt: Object.freeze(new Date(data.captured_at_unix_milli)),
+        authorized: data.authorized,
       })
     }
 
