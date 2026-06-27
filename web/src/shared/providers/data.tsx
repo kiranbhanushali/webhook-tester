@@ -55,11 +55,23 @@ type DataContext = {
     headers,
     delay,
     responseBody,
+    slug,
+    group,
+    responseScript,
+    securityHeaders,
+    forwardUrl,
+    longLived,
   }: {
     statusCode?: number
     headers?: Record<string, string>
     delay?: number
     responseBody?: Uint8Array
+    slug?: string
+    group?: string
+    responseScript?: string
+    securityHeaders?: Array<{ name: string; value: string }>
+    forwardUrl?: string
+    longLived?: boolean
   }): Promise<Readonly<Session>>
 
   /**
@@ -364,14 +376,37 @@ export const DataProvider: React.FC<{
       headers = {},
       delay = 0,
       responseBody = new Uint8Array(),
+      slug,
+      group,
+      responseScript,
+      securityHeaders,
+      forwardUrl,
+      longLived,
     }: {
       statusCode?: number
       headers?: Record<string, string>
       delay?: number
       responseBody?: Uint8Array
+      slug?: string
+      group?: string
+      responseScript?: string
+      securityHeaders?: Array<{ name: string; value: string }>
+      forwardUrl?: string
+      longLived?: boolean
     }): Promise<Readonly<Session>> => {
       // save the session to the server
-      const opts = await api.newSession({ statusCode, headers, delay, responseBody })
+      const opts = await api.newSession({
+        statusCode,
+        headers,
+        delay,
+        responseBody,
+        slug,
+        group,
+        responseScript,
+        securityHeaders,
+        forwardUrl,
+        longLived,
+      })
 
       // add the session ID to the list of all session IDs (update the state)
       setAllSessionIDs((prev) => [...prev, opts.uuid])

@@ -31,4 +31,8 @@ class APIErrorUnknown extends BaseAPIError {
     "Something went wrong, and we don't know what (usually on the client or JS libraries side)"
 }
 
-export { type APIError, APIErrorNotFound, APIErrorUnauthorized, APIErrorCommon, APIErrorUnknown }
+class APIErrorConflict extends BaseAPIError {
+  public readonly description = 'Conflict (e.g. the requested slug is already taken)'
+}
+
+export { type APIError, APIErrorNotFound, APIErrorUnauthorized, APIErrorCommon, APIErrorUnknown, APIErrorConflict }

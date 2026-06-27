@@ -1,12 +1,12 @@
-import { Blockquote } from '@mantine/core'
+import { Blockquote, Button } from '@mantine/core'
 import { notifications as notify } from '@mantine/notifications'
-import { IconInfoCircle, IconRocket } from '@tabler/icons-react'
+import { IconInfoCircle, IconPencil, IconRocket } from '@tabler/icons-react'
 import dayjs from 'dayjs'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { pathTo, RouteIDs } from '~/routing'
 import { type SessionEvents, useBrowserNotifications, useData, useSettings } from '~/shared'
-import { RequestDetails, SessionDetails } from './components'
+import { RequestDetails, SessionDetails, SessionEditor } from './components'
 
 export function SessionAndRequestScreen(): React.JSX.Element {
   const navigate = useNavigate()
@@ -16,6 +16,7 @@ export function SessionAndRequestScreen(): React.JSX.Element {
   ]
   const [sessionLoading, setSessionLoading] = useState<boolean>(false)
   const [requestLoading, setRequestLoading] = useState<boolean>(false)
+  const [editorOpened, setEditorOpened] = useState<boolean>(false)
   const { session, request, switchToSession, switchToRequest, setRequestsCount, removeRequest, removeAllRequests } =
     useData()
   const {
@@ -193,6 +194,19 @@ export function SessionAndRequestScreen(): React.JSX.Element {
     (!!request && <RequestDetails loading={requestLoading} />) || (
       <>
         <SessionDetails loading={sessionLoading} />
+        {!!session && (
+          <>
+            <Button
+              variant="light"
+              leftSection={<IconPencil size="1em" />}
+              onClick={() => setEditorOpened(true)}
+              mb="sm"
+            >
+              Edit session settings
+            </Button>
+            <SessionEditor session={session} opened={editorOpened} onClose={() => setEditorOpened(false)} />
+          </>
+        )}
         <Blockquote my="lg" color="blue" icon={<IconInfoCircle />}>
           Click &quot;New URL&quot; (in the top right corner) to create a new url with the ability to customize status
           code, response body, etc.

@@ -1,10 +1,21 @@
 import React, { useState, useMemo } from 'react'
-import { Button, Checkbox, Group, Modal, NumberInput, Space, Text, Textarea } from '@mantine/core'
-import { IconCodeAsterisk, IconHeading, IconHourglassHigh, IconVersions } from '@tabler/icons-react'
+import { Button, Checkbox, Group, Modal, NumberInput, Space, Switch, Text, Textarea, TextInput } from '@mantine/core'
+import {
+  IconCodeAsterisk,
+  IconHeading,
+  IconHourglassHigh,
+  IconLink,
+  IconTag,
+  IconVersions,
+} from '@tabler/icons-react'
 import { notifications as notify } from '@mantine/notifications'
 import { useNavigate } from 'react-router-dom'
 import { useStorage, UsedStorageKeys, type StorageArea, useSettings, useData } from '~/shared'
 import { pathTo, RouteIDs } from '~/routing'
+import { ScriptHelpButton } from '~/screens/session/components/script-help'
+
+/** Regex for a valid session slug: starts with [a-z0-9], followed by 1-48 chars of [a-z0-9-] */
+const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{1,48}$/
 
 /** Controls for the new session modal */
 const controls = {
@@ -43,6 +54,9 @@ const controls = {
   },
 }
 
+/** Shared header validation limits (reused for security headers). */
+const HEADER_LIMITS = controls.head.limits
+
 /** Validation functions for the controls */
 const validate: { [K in keyof typeof controls]: (v: unknown) => boolean } = {
   code: (v) => typeof v === 'number' && v >= controls.code.limits.min && v <= controls.code.limits.max,
@@ -54,12 +68,12 @@ const validate: { [K in keyof typeof controls]: (v: unknown) => boolean } = {
     const raw = headersTextToHeaders(v) // convert the text to headers
 
     return (
-      raw.length <= controls.head.limits.maxCount && // check the count of headers
+      raw.length <= HEADER_LIMITS.maxCount && // check the count of headers
       raw.every(
         (h) =>
-          h.name.length >= controls.head.limits.minNameLen && // check the name length (min)
-          h.name.length <= controls.head.limits.maxNameLen && // check the name length (max)
-          h.value.length <= controls.head.limits.maxValueLen && // check the value length (max)
+          h.name.length >= HEADER_LIMITS.minNameLen && // check the name length (min)
+          h.name.length <= HEADER_LIMITS.maxNameLen && // check the name length (max)
+          h.value.length <= HEADER_LIMITS.maxValueLen && // check the value length (max)
           /^[a-zA-Z0-9-]+$/i.test(h.name) &&
           /^[^\r\n]*$/i.test(h.value) && // check the header name and value format
           h.name.trim().length > 0 &&
@@ -72,6 +86,20 @@ const validate: { [K in keyof typeof controls]: (v: unknown) => boolean } = {
   destroy: (v) => typeof v === 'boolean',
 }
 
+/** Validate a slug: empty is OK (server auto-generates); non-empty must match the regex. */
+const validateSlug = (v: string): boolean => v === '' || SLUG_REGEX.test(v)
+
+/** Validate a forward URL: empty is OK; non-empty must be a valid http/https URL. */
+const validateForwardUrl = (v: string): boolean => {
+  if (!v) return true
+  try {
+    const u = new URL(v)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export const NewSessionModal: React.FC<{
   opened: boolean
   onClose: () => void
@@ -81,12 +109,22 @@ export const NewSessionModal: React.FC<{
   const { session, newSession, destroySession } = useData()
   const [loading, setLoading] = useState<boolean>(false)
 
+  // --- persisted fields (existing) ---
   const [status, setStatus] = useStorage<number>(controls.code.def, controls.code.key, controls.code.area)
   const [headers, setHeaders] = useStorage<string>(controls.head.def, controls.head.key, controls.head.area)
   const [delay, setDelay] = useStorage<number>(controls.delay.def, controls.delay.key, controls.delay.area)
   const [body, setBody] = useStorage<string>(controls.body.def, controls.body.key, controls.body.area)
   const [destroy, setDestroy] = useStorage<boolean>(controls.destroy.def, controls.destroy.key, controls.destroy.area)
 
+  // --- new fields (local state, not persisted) ---
+  const [slug, setSlug] = useState<string>('')
+  const [group, setGroup] = useState<string>('')
+  const [forwardUrl, setForwardUrl] = useState<string>('')
+  const [longLived, setLongLived] = useState<boolean>(false)
+  const [securityHeaders, setSecurityHeaders] = useState<string>('')
+  const [responseScript, setResponseScript] = useState<string>('')
+
+  // --- validation ---
   const wrongStatusCode = useMemo(() => !validate.code(status), [status])
   const wrongHeaders = useMemo(() => !validate.head(headers), [headers])
   const wrongDelay = useMemo(() => !validate.delay(delay), [delay])
@@ -100,22 +138,40 @@ export const NewSessionModal: React.FC<{
 
     return !bodyIsValid
   }, [body, maxBodySize])
+
+  const wrongSlug = useMemo(() => !validateSlug(slug), [slug])
+  const wrongForwardUrl = useMemo(() => !validateForwardUrl(forwardUrl), [forwardUrl])
+  const wrongSecurityHeaders = useMemo(() => {
+    if (!securityHeaders.trim()) return false // empty is fine
+    return !validate.head(securityHeaders) // reuse response-header validation
+  }, [securityHeaders])
+
   const createDisabled = useMemo(
-    () => wrongStatusCode || wrongHeaders || wrongDelay || wrongResponseBody,
-    [wrongStatusCode, wrongHeaders, wrongDelay, wrongResponseBody]
+    () =>
+      wrongStatusCode ||
+      wrongHeaders ||
+      wrongDelay ||
+      wrongResponseBody ||
+      wrongSlug ||
+      wrongForwardUrl ||
+      wrongSecurityHeaders,
+    [wrongStatusCode, wrongHeaders, wrongDelay, wrongResponseBody, wrongSlug, wrongForwardUrl, wrongSecurityHeaders]
   )
 
   /** Handle the creation of a new session */
   const handleCreate = () => {
     // if any of the fields are invalid, return (kinda fuse)
-    if (wrongStatusCode || wrongHeaders || wrongDelay || wrongResponseBody) {
+    if (createDisabled) {
       return
     }
 
-    // cook the headers (convert text to an array and then to object)
+    // cook the response headers (convert text to an array and then to object)
     const respHeaders: { [k: string]: string } = Object.fromEntries(
       headersTextToHeaders(headers).map((h) => [h.name, h.value])
     )
+
+    // cook the security headers
+    const parsedSecurityHeaders = securityHeaders.trim() ? headersTextToHeaders(securityHeaders) : []
 
     // set the loading state
     setLoading(true)
@@ -128,6 +184,12 @@ export const NewSessionModal: React.FC<{
       headers: Object.keys(respHeaders).length > 0 ? respHeaders : undefined,
       delay: delay > 0 ? delay : undefined,
       responseBody: body.trim().length > 0 ? new TextEncoder().encode(body) : undefined,
+      slug: slug.trim() || undefined,
+      group: group.trim() || undefined,
+      responseScript: responseScript.trim() || undefined,
+      securityHeaders: parsedSecurityHeaders.length > 0 ? parsedSecurityHeaders : undefined,
+      forwardUrl: forwardUrl.trim() || undefined,
+      longLived: longLived || undefined,
     })
       .then((opts) => {
         notify.update({
@@ -186,6 +248,33 @@ export const NewSessionModal: React.FC<{
         and the content.
       </Text>
       <Space h="sm" />
+
+      {/* ── Slug ─────────────────────────────────────────────────── */}
+      <TextInput
+        my="sm"
+        label="Slug"
+        description='Custom URL slug (leave blank to auto-generate). Pattern: [a-z0-9][a-z0-9-]{1,48}'
+        placeholder="my-webhook"
+        leftSection={<IconTag size="1em" />}
+        error={wrongSlug ? 'Slug must start with a lowercase letter or digit and contain only a-z, 0-9 and -' : undefined}
+        disabled={loading}
+        value={slug}
+        onChange={(e) => setSlug(e.currentTarget.value)}
+      />
+
+      {/* ── Group ────────────────────────────────────────────────── */}
+      <TextInput
+        my="sm"
+        label="Group"
+        description="Optional group name for organising sessions"
+        placeholder="team-a"
+        error={false}
+        disabled={loading}
+        value={group}
+        onChange={(e) => setGroup(e.currentTarget.value)}
+      />
+
+      {/* ── Status code ──────────────────────────────────────────── */}
       <NumberInput
         my="sm"
         label="Default status code"
@@ -200,6 +289,8 @@ export const NewSessionModal: React.FC<{
         value={status}
         onChange={(v: string | number): void => setStatus(typeof v === 'string' ? parseInt(v, 10) : v)}
       />
+
+      {/* ── Response headers ─────────────────────────────────────── */}
       <Textarea
         my="sm"
         label="Response headers"
@@ -215,6 +306,8 @@ export const NewSessionModal: React.FC<{
         onChange={(e) => setHeaders(e.currentTarget.value)}
         autosize
       />
+
+      {/* ── Response delay ───────────────────────────────────────── */}
       <NumberInput
         my="sm"
         label="Response delay"
@@ -229,6 +322,8 @@ export const NewSessionModal: React.FC<{
         value={delay}
         onChange={(v: string | number): void => setDelay(typeof v === 'string' ? parseInt(v, 10) : v)}
       />
+
+      {/* ── Response body ─────────────────────────────────────────── */}
       <Textarea
         my="sm"
         label="Response body"
@@ -244,6 +339,68 @@ export const NewSessionModal: React.FC<{
         onChange={(e) => setBody(e.currentTarget.value)}
         autosize
       />
+
+      {/* ── Security headers ─────────────────────────────────────── */}
+      <Textarea
+        my="sm"
+        label="Security headers"
+        description={`Extra headers added to every response for this session (one per line, max ${HEADER_LIMITS.maxCount})`}
+        placeholder={'X-Frame-Options: DENY\nX-Content-Type-Options: nosniff'}
+        styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
+        minRows={2}
+        maxRows={8}
+        error={wrongSecurityHeaders}
+        disabled={loading}
+        value={securityHeaders}
+        onChange={(e) => setSecurityHeaders(e.currentTarget.value)}
+        autosize
+      />
+
+      {/* ── Forward URL ──────────────────────────────────────────── */}
+      <TextInput
+        my="sm"
+        label="Forward URL"
+        description="Forward incoming requests to this URL (optional)"
+        placeholder="https://example.com/webhook"
+        leftSection={<IconLink size="1em" />}
+        error={wrongForwardUrl ? 'Must be a valid http:// or https:// URL' : undefined}
+        disabled={loading}
+        value={forwardUrl}
+        onChange={(e) => setForwardUrl(e.currentTarget.value)}
+      />
+
+      {/* ── Response script ──────────────────────────────────────── */}
+      <Textarea
+        my="sm"
+        label="Response script"
+        description={
+          <Group gap={4} align="center">
+            <Text size="xs" component="span">
+              Go text/template script for dynamic responses (optional)
+            </Text>
+            <ScriptHelpButton />
+          </Group>
+        }
+        placeholder={'@status 200\n{{ .Body }}'}
+        styles={{ input: { fontFamily: 'monospace', fontSize: '0.9em' } }}
+        minRows={2}
+        maxRows={15}
+        disabled={loading}
+        value={responseScript}
+        onChange={(e) => setResponseScript(e.currentTarget.value)}
+        autosize
+      />
+
+      {/* ── Long-lived ───────────────────────────────────────────── */}
+      <Switch
+        my="sm"
+        label="Long-lived session"
+        description="If enabled, the session does not expire on the normal TTL"
+        disabled={loading}
+        checked={longLived}
+        onChange={(e) => setLongLived(e.currentTarget.checked)}
+      />
+
       <Group mt="xl" justify="space-between">
         <Checkbox
           my="sm"

@@ -1,0 +1,135 @@
+/// <reference types="@testing-library/jest-dom/vitest" />
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { MantineProvider } from '@mantine/core'
+import { Notifications } from '@mantine/notifications'
+import { MemoryRouter } from 'react-router-dom'
+import type { Session } from '~/shared'
+import type { SessionPatch } from '~/api'
+
+// Hoist mock functions so they are available in vi.mock factory
+const { mockUpdateSession } = vi.hoisted(() => ({
+  mockUpdateSession: vi.fn<(ref: string, patch: SessionPatch) => Promise<Session>>(),
+}))
+
+vi.mock('~/shared', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('~/shared')>()
+  return {
+    ...mod,
+    useData: () => ({
+      updateSession: mockUpdateSession,
+    }),
+    useSettings: () => ({
+      maxRequestBodySize: 0,
+    }),
+  }
+})
+
+// Import after mock is defined (vi.mock is hoisted, so this is fine)
+import { SessionEditor } from './session-editor'
+
+const BASE_SESSION: Session = {
+  sID: 'uuid-test',
+  responseCode: 200,
+  responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+  responseDelay: 0,
+  responseBody: new Uint8Array(),
+  slug: 'existing-slug',
+  group: 'team-a',
+  responseScript: '',
+  securityHeaders: [],
+  forwardUrl: null,
+  longLived: false,
+}
+
+const renderEditor = (session: Session = BASE_SESSION) =>
+  render(
+    <MantineProvider>
+      <Notifications />
+      <MemoryRouter>
+        <SessionEditor session={session} opened={true} onClose={() => {}} />
+      </MemoryRouter>
+    </MantineProvider>
+  )
+
+describe('SessionEditor', () => {
+  beforeEach(() => {
+    mockUpdateSession.mockResolvedValue(BASE_SESSION)
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  test('pre-fills slug and group from session', () => {
+    renderEditor()
+
+    const slugInput = screen.getByRole('textbox', { name: /slug/i }) as HTMLInputElement
+    expect(slugInput.value).toBe('existing-slug')
+
+    const groupInput = screen.getByRole('textbox', { name: /group/i }) as HTMLInputElement
+    expect(groupInput.value).toBe('team-a')
+  })
+
+  test('pre-fills status code, delay and response headers from session', () => {
+    renderEditor()
+
+    // Response headers textarea should contain the existing header
+    const headersArea = screen.getByRole('textbox', { name: /response headers/i }) as HTMLTextAreaElement
+    expect(headersArea.value).toContain('Content-Type: application/json')
+  })
+
+  test('calls updateSession with the session sID and changed fields on save', async () => {
+    renderEditor()
+
+    // Change the slug
+    fireEvent.change(screen.getByRole('textbox', { name: /slug/i }), {
+      target: { value: 'new-slug' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        'uuid-test',
+        expect.objectContaining({ slug: 'new-slug' })
+      )
+    })
+  })
+
+  test('shows a slug-taken error when updateSession rejects with a 409', async () => {
+    const conflictError = Object.assign(new Error('slug already taken'), {
+      response: { status: 409 },
+    })
+    mockUpdateSession.mockRejectedValue(conflictError)
+
+    renderEditor()
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      // A friendly slug error message should appear somewhere in the document
+      expect(screen.getByText(/slug.*taken|already.*taken|409|conflict/i)).toBeInTheDocument()
+    })
+  })
+
+  test('invalid slug in editor disables Save button', () => {
+    renderEditor()
+
+    fireEvent.change(screen.getByRole('textbox', { name: /slug/i }), {
+      target: { value: 'INVALID_SLUG!' },
+    })
+
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
+  })
+
+  test('valid slug in editor does not disable Save button', () => {
+    renderEditor()
+
+    fireEvent.change(screen.getByRole('textbox', { name: /slug/i }), {
+      target: { value: 'good-slug' },
+    })
+
+    expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled()
+  })
+})

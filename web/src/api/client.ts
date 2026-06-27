@@ -323,22 +323,69 @@ export class Client {
     headers = {},
     delay = 0,
     responseBody = new Uint8Array(),
+    slug,
+    group,
+    responseScript,
+    securityHeaders,
+    forwardUrl,
+    longLived,
   }: {
     statusCode?: number
     headers?: Record<string, string>
     delay?: number
     responseBody?: Uint8Array
+    slug?: string
+    group?: string
+    responseScript?: string
+    securityHeaders?: ReadonlyArray<Readonly<{ name: string; value: string }>>
+    forwardUrl?: string
+    longLived?: boolean
   }): Promise<SessionOptions> {
-    const { data, response } = await this.api.POST('/api/session', {
-      body: {
-        status_code: Math.min(Math.max(100, statusCode), 530), // clamp to the valid range
-        headers: Object.entries(headers)
-          .map(([name, value]) => ({ name, value })) // convert to array of objects
-          .filter((h) => h.value), // remove empty values
-        delay: Math.min(Math.max(0, delay), 30), // clamp to the valid range
-        response_body_base64: uint8ArrayToBase64(responseBody),
-      },
-    })
+    const body: {
+      status_code: number
+      headers: Array<{ name: string; value: string }>
+      delay: number
+      response_body_base64: string
+      slug?: string
+      group?: string
+      response_script?: string
+      security_headers?: Array<{ name: string; value: string }>
+      forward_url?: string
+      long_lived?: boolean
+    } = {
+      status_code: Math.min(Math.max(100, statusCode), 530),
+      headers: Object.entries(headers)
+        .map(([name, value]) => ({ name, value }))
+        .filter((h) => h.value),
+      delay: Math.min(Math.max(0, delay), 30),
+      response_body_base64: uint8ArrayToBase64(responseBody),
+    }
+
+    if (slug) {
+      body.slug = slug
+    }
+
+    if (group) {
+      body.group = group
+    }
+
+    if (responseScript !== undefined) {
+      body.response_script = responseScript
+    }
+
+    if (securityHeaders && securityHeaders.length > 0) {
+      body.security_headers = securityHeaders.map(({ name, value }) => ({ name, value }))
+    }
+
+    if (forwardUrl) {
+      body.forward_url = forwardUrl
+    }
+
+    if (longLived !== undefined) {
+      body.long_lived = longLived
+    }
+
+    const { data, response } = await this.api.POST('/api/session', { body })
 
     if (data) {
       return Client.mapSessionOptions(data)
