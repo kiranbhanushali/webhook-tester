@@ -30,7 +30,7 @@ const BASE_REQUEST: TinyRequest = {
   clientAddress: '127.0.0.1',
   method: 'POST',
   capturedAt: new Date(),
-  url: '/hook',
+  url: new URL('https://example.com/hook'),
   headers: [],
   authorized: undefined,
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { CodeHighlight } from '@mantine/code-highlight'
-import { Badge, Button, Collapse, Divider, Flex, Grid, Skeleton, Table, Tabs, Text, Title } from '@mantine/core'
+import { Badge, Button, Collapse, Divider, Flex, Grid, Skeleton, Table, Tabs, Text, Title, Tooltip } from '@mantine/core'
 import { useDisclosure, useInterval } from '@mantine/hooks'
 import { Link } from 'react-router-dom'
 import { IconBinary, IconDownload, IconLetterCase, IconSend } from '@tabler/icons-react'
@@ -74,9 +74,18 @@ export const RequestDetails: React.FC<{ loading?: boolean }> = ({ loading = fals
                   <Table.Td ta="right">Method</Table.Td>
                   <Table.Td>
                     {(loading && <Skeleton radius="xl" h="sm" w="15%" />) || (
-                      <Badge color={methodToColor(request.method ?? '')} mb="0.2em">
-                        {request.method}
-                      </Badge>
+                      <Flex align="center" gap="xs" wrap="wrap">
+                        <Badge color={methodToColor(request.method ?? '')} mb="0.2em">
+                          {request.method}
+                        </Badge>
+                        {request.authorized === false && (
+                          <Tooltip label="Inbound auth failed — 401 returned" withArrow>
+                            <Badge color="red" variant="filled" size="sm" mb="0.2em">
+                              Unauthorized
+                            </Badge>
+                          </Tooltip>
+                        )}
+                      </Flex>
                     )}
                   </Table.Td>
                 </Table.Tr>
