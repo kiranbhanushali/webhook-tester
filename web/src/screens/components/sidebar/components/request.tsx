@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState, type ForwardedRef } from 'react'
 import { notifications as notify } from '@mantine/notifications'
-import { Badge, CloseButton, Flex, Text, UnstyledButton } from '@mantine/core'
+import { Badge, CloseButton, Flex, Text, Tooltip, UnstyledButton } from '@mantine/core'
 import { useInterval } from '@mantine/hooks'
 import dayjs from 'dayjs'
 import { Link, useNavigate } from 'react-router-dom'
@@ -97,6 +97,13 @@ export const Request: React.FC<{
             >
               {request.method}
             </Badge>
+            {request.authorized === false && (
+              <Tooltip label="Inbound auth failed — 401 returned" withArrow>
+                <Badge color="red" variant="filled" size="sm" mx="xs">
+                  Unauthorized
+                </Badge>
+              </Tooltip>
+            )}
           </Flex>
           <Text size="sm">
             {dayjs(request.capturedAt).format('h:mm:ss a')}
