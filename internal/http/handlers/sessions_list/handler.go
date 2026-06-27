@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/google/uuid"
+
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/openapi"
 	"gh.tarampamp.am/webhook-tester/v2/internal/storage"
 )
@@ -48,7 +50,10 @@ func (h *Handler) Handle(ctx context.Context, p openapi.ApiSessionsListParams) (
 	out := make(openapi.SessionsListResponse, 0, len(summaries))
 
 	for _, s := range summaries {
+		sUUID, _ := uuid.Parse(s.ID) // ID is a UUID for real sessions; zero value otherwise
+
 		item := openapi.SessionSummary{
+			Uuid:               sUUID,
 			Slug:               s.Slug,
 			StatusCode:         openapi.StatusCode(s.Code),
 			RequestsCount:      uint32(s.RequestsCount), //nolint:gosec

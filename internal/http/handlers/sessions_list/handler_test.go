@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -71,10 +72,12 @@ func TestHandler_ListsAndMaps(t *testing.T) {
 		require.NotNil(t, b.LastRequestUnixMilli)
 		assert.Positive(t, *b.LastRequestUnixMilli)
 		assert.Positive(t, b.ExpiresAtUnixMilli)
+		assert.Equal(t, uuid.MustParse(bID), b.Uuid, "summary for bravo must carry the session uuid")
 
 		a := (*resp)[1]
 		assert.EqualValues(t, 0, a.RequestsCount)
 		assert.Nil(t, a.LastRequestUnixMilli, "session with no requests reports nil last-request time")
+		assert.Equal(t, uuid.MustParse(aID), a.Uuid, "summary for alpha must carry the session uuid")
 	})
 
 	t.Run("group filter", func(t *testing.T) {
@@ -94,6 +97,4 @@ func TestHandler_ListsAndMaps(t *testing.T) {
 		require.Len(t, *resp, 1)
 		assert.Equal(t, "bravo", (*resp)[0].Slug)
 	})
-
-	_ = aID
 }

@@ -342,6 +342,7 @@ components:
       description: Summary information about a session
       type: object
       properties:
+        uuid: {$ref: '#/components/schemas/UUID'}
         slug: {type: string, example: my-session}
         group: {type: string, example: team-a}
         status_code: {$ref: '#/components/schemas/StatusCode'}
@@ -350,7 +351,7 @@ components:
         created_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
         expires_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
         long_lived: {type: boolean, example: false}
-      required: [slug, status_code, requests_count, created_at_unix_milli, expires_at_unix_milli, long_lived]
+      required: [uuid, slug, status_code, requests_count, created_at_unix_milli, expires_at_unix_milli, long_lived]
       additionalProperties: false
 
     SearchResultItem:
