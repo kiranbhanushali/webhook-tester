@@ -7,14 +7,14 @@
   </a>
 </p>
 
-# WebHook Tester —  fork
+# WebHook Tester
 
 > **A fork of [tarampampam/webhook-tester](https://github.com/tarampampam/webhook-tester).** It keeps the upstream's
 > fast Go core and embedded React UI, and adds a layer of capabilities aimed at debugging **real, long-running
 > callback integrations** — capturing provider callbacks, searching for a specific transaction by identifier,
-> signing responses, and re-delivering a captured request. It was built for bank / callback integration
-> integration testing, where callbacks carry identifiers like `trackingId` / `referenceId`, but nothing here is
-> specific — it's a general-purpose, self-hosted webhook debugger.
+> signing responses, and re-delivering a captured request. It's handy when callbacks carry identifiers like
+> `trackingId` / `referenceId` and you need to find, inspect, or re-deliver a specific one — a general-purpose,
+> self-hosted webhook debugger.
 
 This application lets you test and debug webhooks and HTTP requests using unique URLs. You can customize the response
 code, headers, body, and even a response delay — and, in this fork, generate the response dynamically from the
@@ -485,9 +485,9 @@ This is a fork of **[tarampampam/webhook-tester](https://github.com/tarampampam/
 handler architecture, the pubsub→WebSocket live updates, the memory/Redis/fs storage drivers, and the ngrok tunnel
 integration. All of that hard work belongs to the upstream project and its contributors — huge thanks.
 
-The features under [What this fork adds](#-what-this-fork-adds) were built on top of that base for callback /
-callback-integration debugging. The upstream demo is at [wh.tarampamp.am](https://wh.tarampamp.am/) (it does not include
-this fork's additions).
+The features under [What this fork adds](#-what-this-fork-adds) were built on top of that base for
+callback-integration debugging. The upstream demo is at [wh.tarampamp.am](https://wh.tarampamp.am/) (it does not
+include this fork's additions).
 
 ## 🤖 AI Agent Instructions
 
