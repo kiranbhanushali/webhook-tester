@@ -1,3 +1,4 @@
 export { EndpointRail, ALL_SESSIONS } from './endpoint-rail'
 export { LiveStream } from './live-stream'
 export { RequestDrawer, type SelectedRequest } from './request-drawer'
+export { RequestPanel } from './request-panel'

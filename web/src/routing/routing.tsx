@@ -1,11 +1,29 @@
+import React, { lazy, Suspense } from 'react'
+import { Center, Loader } from '@mantine/core'
 import { createPath, Navigate, type RouteObject } from 'react-router-dom'
 import { type Client } from '~/api'
 import { DefaultLayout } from '~/screens'
 import { NotFoundScreen } from '~/screens/not-found'
-import { SessionAndRequestScreen } from '~/screens/session'
-import { HomeScreen } from '~/screens/home'
-import { DashboardScreen } from '~/screens/dashboard'
-import { SessionsListScreen } from '~/screens/sessions'
+
+// Each screen is its own dynamic import so Vite/Rollup can split it into a separate chunk.
+// The layout shell (DefaultLayout) stays eager because it is always rendered.
+const HomeScreen = lazy(() => import('~/screens/home').then((m) => ({ default: m.HomeScreen })))
+const DashboardScreen = lazy(() =>
+  import('~/screens/dashboard').then((m) => ({ default: m.DashboardScreen }))
+)
+const SessionAndRequestScreen = lazy(() =>
+  import('~/screens/session').then((m) => ({ default: m.SessionAndRequestScreen }))
+)
+const SessionsListScreen = lazy(() =>
+  import('~/screens/sessions').then((m) => ({ default: m.SessionsListScreen }))
+)
+
+/** Lightweight loading state shown while a lazy chunk is being fetched. */
+const ScreenFallback: React.FC = () => (
+  <Center h="60vh">
+    <Loader size="sm" color="dimmed" />
+  </Center>
+)
 
 export enum RouteIDs {
   Home = 'home',
@@ -22,13 +40,21 @@ export const createRoutes = (apiClient: Client): RouteObject[] => [
     children: [
       {
         index: true,
-        element: <HomeScreen />,
+        element: (
+          <Suspense fallback={<ScreenFallback />}>
+            <HomeScreen />
+          </Suspense>
+        ),
         id: RouteIDs.Home,
       },
       {
         path: 'dashboard',
         id: RouteIDs.Dashboard,
-        element: <DashboardScreen />,
+        element: (
+          <Suspense fallback={<ScreenFallback />}>
+            <DashboardScreen />
+          </Suspense>
+        ),
       },
       {
         // redirect to the home screen if the path is just `/s/`
@@ -39,12 +65,20 @@ export const createRoutes = (apiClient: Client): RouteObject[] => [
         // please note that `sID` and `rID` accessed via `useParams` hook, and changing this will break the app
         path: 's/:sID/:rID?',
         id: RouteIDs.SessionAndRequest,
-        element: <SessionAndRequestScreen />,
+        element: (
+          <Suspense fallback={<ScreenFallback />}>
+            <SessionAndRequestScreen />
+          </Suspense>
+        ),
       },
       {
         path: 'sessions',
         id: RouteIDs.SessionsList,
-        element: <SessionsListScreen />,
+        element: (
+          <Suspense fallback={<ScreenFallback />}>
+            <SessionsListScreen />
+          </Suspense>
+        ),
       },
     ],
   },

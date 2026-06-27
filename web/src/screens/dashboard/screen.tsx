@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SessionSummary } from '~/api'
 import { useData } from '~/shared'
 import { NewSessionModal } from '~/screens/components/header/components'
-import { ALL_SESSIONS, EndpointRail, LiveStream, RequestDrawer, type SelectedRequest } from './components'
+import { ALL_SESSIONS, EndpointRail, LiveStream, RequestPanel, type SelectedRequest } from './components'
 import { useFirehose } from './use-firehose'
 import styles from './screen.module.css'
 
@@ -97,7 +97,6 @@ export function DashboardScreen(): React.JSX.Element {
   return (
     <>
       <NewSessionModal opened={newSessionOpened} onClose={handleNewSessionClose} />
-      <RequestDrawer selected={detail} onClose={() => setDetail(null)} />
 
       <Title order={3} mb="md" style={{ fontWeight: 400 }}>
         Dashboard
@@ -124,6 +123,10 @@ export function DashboardScreen(): React.JSX.Element {
             filtered={selected !== ALL_SESSIONS && filteredEvents.length === 0 && events.length > 0}
             onRowClick={handleRowClick}
           />
+        </Paper>
+
+        <Paper className={styles.detail} withBorder p="sm" radius="md">
+          <RequestPanel selected={detail} />
         </Paper>
       </div>
     </>

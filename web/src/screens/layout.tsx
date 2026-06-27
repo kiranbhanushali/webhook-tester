@@ -2,7 +2,7 @@ import { Affix, AppShell, Button, ScrollArea, Transition } from '@mantine/core'
 import { useDisclosure, useWindowScroll } from '@mantine/hooks'
 import { IconArrowUp } from '@tabler/icons-react'
 import React, { useCallback, useEffect, useState } from 'react'
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import type { SemVer } from 'semver'
 import { type Client } from '~/api'
 import { pathTo, RouteIDs } from '~/routing'
@@ -11,6 +11,8 @@ import { Header, SideBar } from './components'
 
 export default function DefaultLayout({ api }: { api: Client }): React.JSX.Element {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const isDashboard = pathname === '/dashboard' || pathname.startsWith('/dashboard/')
   const [scroll, scrollTo] = useWindowScroll()
   const [navBarIsOpened, navBarHandlers] = useDisclosure()
   const [currentVersion, setCurrentVersion] = useState<SemVer | null>(null)
@@ -57,7 +59,11 @@ export default function DefaultLayout({ api }: { api: Client }): React.JSX.Eleme
   return (
     <AppShell
       header={{ height: 70 }}
-      navbar={{ width: 300, breakpoint: 'sm', collapsed: { mobile: !navBarIsOpened } }}
+      navbar={
+        isDashboard
+          ? undefined
+          : { width: 300, breakpoint: 'sm', collapsed: { mobile: !navBarIsOpened } }
+      }
       padding="md"
     >
       <AppShell.Header style={{ zIndex: 103 }}>
@@ -69,14 +75,16 @@ export default function DefaultLayout({ api }: { api: Client }): React.JSX.Eleme
         />
       </AppShell.Header>
 
-      <AppShell.Navbar p="md" pr={0} style={{ zIndex: 102 }} withBorder={false} onClick={handleNavbarClick}>
-        {/* `grow` bounds the ScrollArea to the navbar height so the request list scrolls INSIDE it and
-            the infinite-scroll sentinel is only intersected at the real bottom — not always visible
-            (an unbounded section grows the page, keeping the sentinel on screen → runaway pagination). */}
-        <AppShell.Section grow component={ScrollArea} pr="md" scrollbarSize={6}>
-          <SideBar />
-        </AppShell.Section>
-      </AppShell.Navbar>
+      {!isDashboard && (
+        <AppShell.Navbar p="md" pr={0} style={{ zIndex: 102 }} withBorder={false} onClick={handleNavbarClick}>
+          {/* `grow` bounds the ScrollArea to the navbar height so the request list scrolls INSIDE it and
+              the infinite-scroll sentinel is only intersected at the real bottom — not always visible
+              (an unbounded section grows the page, keeping the sentinel on screen → runaway pagination). */}
+          <AppShell.Section grow component={ScrollArea} pr="md" scrollbarSize={6}>
+            <SideBar />
+          </AppShell.Section>
+        </AppShell.Navbar>
+      )}
 
       <AppShell.Main>
         <Outlet />

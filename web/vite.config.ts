@@ -38,6 +38,13 @@ export default defineConfig({
         entryFileNames: 'js/[name]-[hash].js',
         chunkFileNames: 'js/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
+        manualChunks: {
+          // Stable, rarely-changing vendor chunks — browsers can cache them independently
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-mantine': ['@mantine/core', '@mantine/hooks', '@mantine/notifications', '@mantine/code-highlight'],
+          'vendor-tabler': ['@tabler/icons-react'],
+          'vendor-dayjs': ['dayjs'],
+        },
       },
     },
     sourcemap: isWatchMode,
