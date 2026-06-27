@@ -28,13 +28,19 @@ vi.mock('~/shared', async (importOriginal) => {
 
 import { SideBar } from './sidebar'
 
-// Capture the IntersectionObserver callback so a test can simulate the sentinel scrolling into view.
+// Capture the IntersectionObserver callback so a test can simulate the sentinel scrolling into view,
+// and count instances/observe calls so a test can prove the observer is created ONCE (not per page).
 let ioCallback: IntersectionObserverCallback | null = null
+let ioInstances = 0
+let ioObserveCalls = 0
 class MockIntersectionObserver {
   constructor(cb: IntersectionObserverCallback) {
     ioCallback = cb
+    ioInstances++
   }
-  observe = vi.fn()
+  observe = vi.fn(() => {
+    ioObserveCalls++
+  })
   unobserve = vi.fn()
   disconnect = vi.fn()
   takeRecords = vi.fn(() => [])
@@ -42,6 +48,11 @@ class MockIntersectionObserver {
   rootMargin = ''
   thresholds = []
 }
+
+const fireSentinelVisible = () =>
+  act(() => {
+    ioCallback?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
+  })
 
 const mkReq = (rID: string): TinyRequest => ({
   rID,
@@ -65,6 +76,8 @@ const renderSidebar = () =>
 beforeEach(() => {
   vi.stubGlobal('IntersectionObserver', MockIntersectionObserver as unknown as typeof IntersectionObserver)
   ioCallback = null
+  ioInstances = 0
+  ioObserveCalls = 0
   dataMock.session = { sID: 'sess-1' }
   dataMock.request = null
   dataMock.requests = [mkReq('r3'), mkReq('r2')]
@@ -92,9 +105,7 @@ describe('SideBar — infinite scroll', () => {
     expect(dataMock.loadMoreRequests).not.toHaveBeenCalled()
 
     // simulate the sentinel entering the viewport
-    act(() => {
-      ioCallback?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
-    })
+    fireSentinelVisible()
 
     expect(dataMock.loadMoreRequests).toHaveBeenCalledTimes(1)
   })
@@ -106,5 +117,69 @@ describe('SideBar — infinite scroll', () => {
     expect(screen.queryByTestId('requests-load-more')).toBeNull()
     expect(ioCallback).toBeNull() // no observer is created when there is nothing more to load
     expect(dataMock.loadMoreRequests).not.toHaveBeenCalled()
+  })
+
+  test('does NOT start a second load while one is in flight (sentinel staying visible fires twice)', () => {
+    dataMock.hasMoreRequests = true
+    // a never-settling promise keeps the load "in flight" so the re-entrancy guard stays engaged
+    dataMock.loadMoreRequests = vi.fn().mockReturnValue(new Promise<void>(() => {}))
+    renderSidebar()
+
+    // the IntersectionObserver re-fires for the still-visible sentinel (the #185 loop trigger)
+    fireSentinelVisible()
+    fireSentinelVisible()
+    fireSentinelVisible()
+
+    // ...but the synchronous ref guard collapses them into a single fetch
+    expect(dataMock.loadMoreRequests).toHaveBeenCalledTimes(1)
+  })
+
+  test('releases the guard after the in-flight load settles, allowing the next page', async () => {
+    dataMock.hasMoreRequests = true
+    let resolveLoad: () => void = () => {}
+    const pending = new Promise<void>((res) => {
+      resolveLoad = res
+    })
+    dataMock.loadMoreRequests = vi.fn().mockReturnValue(pending)
+    renderSidebar()
+
+    fireSentinelVisible()
+    expect(dataMock.loadMoreRequests).toHaveBeenCalledTimes(1)
+
+    // still in flight → ignored
+    fireSentinelVisible()
+    expect(dataMock.loadMoreRequests).toHaveBeenCalledTimes(1)
+
+    // settle the load and flush the .finally microtask that clears the guard
+    await act(async () => {
+      resolveLoad()
+      await pending
+    })
+
+    fireSentinelVisible()
+    expect(dataMock.loadMoreRequests).toHaveBeenCalledTimes(2)
+  })
+
+  test('observes the sentinel ONCE — appending a page does not recreate the observer', () => {
+    dataMock.hasMoreRequests = true
+    dataMock.requests = [mkReq('r3'), mkReq('r2')]
+    const { rerender } = renderSidebar()
+
+    expect(ioInstances).toBe(1)
+    expect(ioObserveCalls).toBe(1)
+
+    // a loaded page appends requests (requests.length changes) — the observer must NOT be recreated,
+    // which is what previously re-fired the callback for the still-visible sentinel → infinite loop
+    dataMock.requests = [mkReq('r5'), mkReq('r4'), mkReq('r3'), mkReq('r2')]
+    rerender(
+      <MantineProvider>
+        <MemoryRouter>
+          <SideBar />
+        </MemoryRouter>
+      </MantineProvider>
+    )
+
+    expect(ioInstances).toBe(1)
+    expect(ioObserveCalls).toBe(1)
   })
 })

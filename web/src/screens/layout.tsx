@@ -70,7 +70,10 @@ export default function DefaultLayout({ api }: { api: Client }): React.JSX.Eleme
       </AppShell.Header>
 
       <AppShell.Navbar p="md" pr={0} style={{ zIndex: 102 }} withBorder={false} onClick={handleNavbarClick}>
-        <AppShell.Section component={ScrollArea} pr="md" scrollbarSize={6}>
+        {/* `grow` bounds the ScrollArea to the navbar height so the request list scrolls INSIDE it and
+            the infinite-scroll sentinel is only intersected at the real bottom — not always visible
+            (an unbounded section grows the page, keeping the sentinel on screen → runaway pagination). */}
+        <AppShell.Section grow component={ScrollArea} pr="md" scrollbarSize={6}>
           <SideBar />
         </AppShell.Section>
       </AppShell.Navbar>

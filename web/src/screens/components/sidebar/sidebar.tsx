@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef } from 'react'
 import { Button, Center, Image, Loader, Stack, Text } from '@mantine/core'
 import { IconTrash } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
@@ -12,26 +12,44 @@ export const SideBar = (): React.JSX.Element => {
   const { session, request, requests, removeAllRequests, loadMoreRequests, hasMoreRequests } = useData()
   const activeRequestRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
-  const [loadingMore, setLoadingMore] = useState<boolean>(false)
+
+  // Re-entrancy guard. Set synchronously BEFORE the fetch so two observer callbacks fired in the same
+  // tick (e.g. the sentinel staying visible) cannot start two overlapping loads. A state flag alone
+  // races: setState is async, so both callbacks would still read the stale `false`.
+  const loadingRef = useRef<boolean>(false)
+
+  // Keep the latest loader + flag in refs so the observer can be created ONCE (see the effect below)
+  // and read fresh values without re-subscribing on every appended page.
+  const loadMoreRef = useRef(loadMoreRequests)
+  loadMoreRef.current = loadMoreRequests
+  const hasMoreRef = useRef(hasMoreRequests)
+  hasMoreRef.current = hasMoreRequests
 
   // fetch the next (older) page when the user scrolls the sentinel into view (infinite scroll)
   const onSentinelVisible = useCallback(() => {
-    if (loadingMore) {
+    if (loadingRef.current || !hasMoreRef.current) {
       return
     }
 
-    setLoadingMore(true)
-    loadMoreRequests().finally(() => setLoadingMore(false))
-  }, [loadingMore, loadMoreRequests])
+    loadingRef.current = true
+    loadMoreRef.current().finally(() => {
+      loadingRef.current = false
+    })
+  }, [])
 
   useEffect(() => {
     const el = sentinelRef.current
 
-    if (!el || !hasMoreRequests || typeof IntersectionObserver === 'undefined') {
+    if (!el || typeof IntersectionObserver === 'undefined') {
       return
     }
 
-    // rootMargin pre-loads the next page slightly before the sentinel is fully on screen
+    // Observe the sentinel ONCE. We deliberately do NOT depend on `requests.length`: recreating the
+    // observer per appended page makes `observe()` re-fire for the still-visible sentinel → load →
+    // append → recreate → fire → infinite pagination + "Maximum update depth exceeded" (#185). The
+    // single observer fires naturally only when the user actually scrolls the sentinel into view.
+    // `hasMoreRequests` is in the deps because the sentinel element only mounts while it is true.
+    // rootMargin pre-loads the next page slightly before the sentinel is fully on screen.
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
@@ -44,7 +62,7 @@ export const SideBar = (): React.JSX.Element => {
     observer.observe(el)
 
     return () => observer.disconnect()
-  }, [hasMoreRequests, onSentinelVisible, requests.length])
+  }, [hasMoreRequests, onSentinelVisible])
 
   return (
     <Stack align="stretch" justify="flex-start" gap="xs">
