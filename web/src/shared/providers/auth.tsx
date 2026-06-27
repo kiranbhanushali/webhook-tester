@@ -37,7 +37,7 @@ const authContext = createContext<AuthContextType>({
  *   - it listens for server 401 responses (via the api auth bus) and surfaces a minimal token prompt so the app stays
  *     usable when auth is enabled. A richer login UI can be layered on by a later task.
  */
-export const AuthProvider: React.FC<{ api: Client; children: React.JSX.Element }> = ({ api, children }) => {
+export const AuthProvider: React.FC<{ api: Client; children: React.ReactNode }> = ({ api, children }) => {
   const [token, setToken] = useState<string | null>(() => getStoredToken())
   const [authRequired, setAuthRequired] = useState<boolean>(false)
   const [inputToken, setInputToken] = useState<string>('')

@@ -38,14 +38,19 @@ export const clearStoredToken = (): void => {
 }
 
 /**
- * Creates an openapi-fetch middleware that attaches `Authorization: Bearer <token>` to every request when a token is
- * present. The token is read lazily on every request, so logging in mid-session takes effect immediately.
+ * Creates an openapi-fetch middleware that attaches `Authorization: Bearer <token>` when a token is present.
+ *
+ * The token is read lazily on every request, so logging in mid-session takes effect immediately.
+ *
+ * SAME-ORIGIN CONSTRAINT: the header is only attached when the request's origin matches `allowedOrigin` (the client's
+ * configured base origin). The API is same-origin in practice, but this guard guarantees the secret can never leak to a
+ * third party even if a cross-origin base URL is ever configured or a request is redirected off-origin.
  */
-export const createAuthMiddleware = (getToken: TokenProvider): Middleware => ({
+export const createAuthMiddleware = (getToken: TokenProvider, allowedOrigin: string): Middleware => ({
   async onRequest({ request }): Promise<Request> {
     const token = getToken()
 
-    if (token) {
+    if (token && new URL(request.url).origin === allowedOrigin) {
       request.headers.set('Authorization', `Bearer ${token}`)
     }
 

@@ -167,8 +167,9 @@ export class Client {
 
     this.api = createClient<paths>({ ...opt, baseUrl: baseUrl.toString() })
     // the auth middleware is registered first so its onRequest runs first (attaching the Bearer header before the
-    // request is sent); the response validators run afterwards and surface 401s as APIErrorUnauthorized.
-    this.api.use(createAuthMiddleware(this.getToken), throwIfNotJSON, throwIfNotValidResponse)
+    // request is sent); the response validators run afterwards and surface 401s as APIErrorUnauthorized. The token is
+    // only attached to same-origin requests (see createAuthMiddleware) so it can never leak cross-origin.
+    this.api.use(createAuthMiddleware(this.getToken, this.baseUrl.origin), throwIfNotJSON, throwIfNotValidResponse)
   }
 
   /** Maps the wire shape of the create/get/update session response into the immutable client model. */
