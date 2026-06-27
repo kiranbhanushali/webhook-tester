@@ -60,7 +60,7 @@ type OpenAPI struct {
 		sessionDelete      func(context.Context, sID) (*openapi.SuccessfulOperationResponse, error)
 		sessionsList       func(context.Context, openapi.ApiSessionsListParams) (*openapi.SessionsListResponse, error)
 		search             func(context.Context, openapi.ApiSearchParams) (*openapi.SearchResponse, error)
-		requestsList       func(context.Context, sID) (*openapi.CapturedRequestsListResponse, error)
+		requestsList       func(context.Context, sID, openapi.ApiSessionListRequestsParams) (*openapi.CapturedRequestsListResponse, error)
 		requestsDelete     func(context.Context, sID) (*openapi.SuccessfulOperationResponse, error)
 		requestsSubscribe  func(context.Context, http.ResponseWriter, *http.Request, sID) error
 		firehoseSubscribe  func(context.Context, http.ResponseWriter, *http.Request) error
@@ -254,8 +254,10 @@ func (o *OpenAPI) ApiSessionDelete(w http.ResponseWriter, r *http.Request, sID s
 	}
 }
 
-func (o *OpenAPI) ApiSessionListRequests(w http.ResponseWriter, r *http.Request, sID sID) {
-	if resp, err := o.handlers.requestsList(r.Context(), sID); err != nil {
+func (o *OpenAPI) ApiSessionListRequests(
+	w http.ResponseWriter, r *http.Request, sID sID, params openapi.ApiSessionListRequestsParams,
+) {
+	if resp, err := o.handlers.requestsList(r.Context(), sID, params); err != nil {
 		var statusCode = http.StatusInternalServerError
 
 		if errors.Is(err, storage.ErrNotFound) {

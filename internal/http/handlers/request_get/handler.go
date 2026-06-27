@@ -30,6 +30,7 @@ func (h *Handler) Handle(ctx context.Context, sID sID, rID rID) (*openapi.Captur
 	}
 
 	return &openapi.CapturedRequestsResponse{
+		Seq:                  r.Seq,
 		CapturedAtUnixMilli:  r.CreatedAtUnixMilli,
 		ClientAddress:        r.ClientAddr,
 		Headers:              rHeaders,

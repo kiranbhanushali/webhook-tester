@@ -137,11 +137,34 @@ paths:
         '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
 
   /api/session/{session_uuid}/requests:
-    get: # TODO: add possibility to omit the request body
-      summary: Get the list of requests for a session by UUID
+    get:
+      summary: Get a page of captured requests for a session by UUID (newest first, cursor-paginated)
+      description: >
+        Returns the session's captured requests NEWEST first, cursor-paginated. Omit `before` (or
+        pass 0) to fetch the newest page; then pass the returned `next_before` as `before` on each
+        subsequent request to fetch the next (older) page (no skips, no duplicates). `has_more` is
+        true while older requests remain. The session reference may be a UUID or a slug.
       tags: [api]
       operationId: apiSessionListRequests
-      parameters: [{$ref: '#/components/parameters/SessionUUIDInPath'}]
+      parameters:
+        - {$ref: '#/components/parameters/SessionUUIDInPath'}
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            x-go-type: int64
+            minimum: 0
+            description: 'Return requests with seq less than this cursor; 0 (default) = newest page'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            x-go-type: int
+            minimum: 1
+            maximum: 200
+            description: 'Maximum number of requests to return (default: 50, max: 200)'
       responses:
         '200': {$ref: '#/components/responses/CapturedRequestsListResponse'}
         '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
@@ -502,6 +525,11 @@ components:
       type: object
       description: Recorded request
       properties:
+        seq:
+          type: integer
+          x-go-type: int64
+          example: 42
+          description: Durable, strictly-increasing, never-reused capture sequence (use as the pagination cursor)
         uuid: {$ref: '#/components/schemas/UUID'}
         client_address: {type: string, format: IPv4, example: '214.184.32.7'}
         method: {$ref: '#/components/schemas/HttpMethod'}
@@ -513,7 +541,24 @@ components:
           example: 'https://example.com/path?query=string'
         captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
         authorized: {type: boolean, example: true, description: 'False when the request was rejected by inbound auth (it is still captured)'}
-      required: [uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli, authorized]
+      required: [seq, uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli, authorized]
+      additionalProperties: false
+
+    CapturedRequestsPage:
+      type: object
+      description: A page of captured requests (newest first) with a cursor for the next (older) page
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/CapturedRequest'}}
+        next_before:
+          type: integer
+          x-go-type: int64
+          example: 42
+          description: Pass as `before` to fetch the next (older) page; the seq of the oldest item returned (echoes the request's `before` when empty)
+        has_more:
+          type: boolean
+          example: true
+          description: True when the page was full (limit reached), so older requests may remain
+      required: [items, next_before, has_more]
       additionalProperties: false
 
     EventItem:
@@ -763,10 +808,10 @@ components:
               9b6bbab9-c197-4dd3-bc3f-3cb6253820c8: false
 
     CapturedRequestsListResponse:
-      description: List of captured requests, sorted from newest to oldest
+      description: A page of captured requests (newest first) with a cursor for the next (older) page
       content:
         application/json:
-          schema: {type: array, items: {$ref: '#/components/schemas/CapturedRequest'}}
+          schema: {$ref: '#/components/schemas/CapturedRequestsPage'}
 
     CapturedRequestsResponse:
       description: Captured request
