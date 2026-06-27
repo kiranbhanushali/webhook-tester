@@ -219,10 +219,12 @@ func New( //nolint:funlen,gocognit,gocyclo
 					SessionUUID: sID,
 					SessionSlug: sess.Slug,
 					Request: &pubsub.Request{
-						ID:                 rID,
-						ClientAddr:         captured.ClientAddr,
-						Method:             captured.Method,
-						Headers:            headers,
+						ID:         rID,
+						ClientAddr: captured.ClientAddr,
+						Method:     captured.Method,
+						// Headers are intentionally omitted: convertEvent never puts them on the
+						// FirehoseEventRequest wire, so carrying them here would only serialize and ship
+						// full request headers (incl. any inbound-auth secret) over redis to be discarded.
 						URL:                captured.URL,
 						CreatedAtUnixMilli: captured.CreatedAtUnixMilli,
 						Authorized:         captured.Authorized,
