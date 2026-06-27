@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import {
   APIErrorNotFound,
   type Client,
+  type FirehoseEvent,
   RequestEventAction,
   type ReplayResult,
   type SearchResultItem,
@@ -163,6 +164,16 @@ type DataContext = {
   /** Replay a captured request to a target URL (defaults to the session's forward URL when omitted). */
   replayRequest(ref: string, rID: string, targetUrl?: string): Promise<ReplayResult>
 
+  /**
+   * Subscribe to the GLOBAL cross-session firehose: a single live stream of every captured webhook across
+   * ALL sessions (for the dashboard). Resolves with a closer function to terminate the WebSocket.
+   */
+  subscribeFirehose(listeners: {
+    onConnected?: () => void
+    onEvent: (event: FirehoseEvent) => void
+    onError?: (err: Error) => void
+  }): Promise<() => void>
+
   /** The URL for the webhook (if session is active) */
   readonly webHookUrl: Readonly<URL> | null
 }
@@ -188,6 +199,7 @@ const dataContext = createContext<DataContext>({
   searchIdentifiers: () => notInitialized(),
   updateSession: () => notInitialized(),
   replayRequest: () => notInitialized(),
+  subscribeFirehose: () => notInitialized(),
   webHookUrl: null,
 })
 
@@ -288,6 +300,7 @@ export const DataProvider: React.FC<{
                     payload: null, // server does not send the payload
                     capturedAt: req.capturedAt,
                     headers: [...req.headers],
+                    authorized: req.authorized,
                   })
 
                   // append the new request in front of the list (update the state)
@@ -300,6 +313,7 @@ export const DataProvider: React.FC<{
                       headers: [...req.headers],
                       url: req.url,
                       capturedAt: req.capturedAt,
+                      authorized: req.authorized,
                     }),
                     ...prev,
                   ])
@@ -313,6 +327,7 @@ export const DataProvider: React.FC<{
                       headers: [...req.headers],
                       url: req.url,
                       capturedAt: req.capturedAt,
+                      authorized: req.authorized,
                     })
                   )
                 }
@@ -900,6 +915,12 @@ export const DataProvider: React.FC<{
     [api]
   )
 
+  /** Subscribe to the global cross-session firehose (all captured webhooks). */
+  const subscribeFirehose = useCallback<DataContext['subscribeFirehose']>(
+    (listeners) => api.subscribeFirehose(listeners),
+    [api]
+  )
+
   // on provider mount
   useEffect(() => {
     // load all session IDs from the database
@@ -966,6 +987,7 @@ export const DataProvider: React.FC<{
         searchIdentifiers,
         updateSession,
         replayRequest,
+        subscribeFirehose,
         webHookUrl,
         setRequestsCount,
       }}

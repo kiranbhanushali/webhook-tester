@@ -1,8 +1,8 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import fetchMock from '@fetch-mock/vitest'
 import { base64ToUint8Array, uint8ArrayToBase64 } from '~/shared'
 import { APIErrorCommon } from './errors'
-import { Client } from './client'
+import { Client, type FirehoseEvent } from './client'
 
 beforeAll(() => fetchMock.mockGlobal())
 afterAll(() => fetchMock.mockRestore())
@@ -453,6 +453,95 @@ describe('getSessionRequest (single) — authorized field', () => {
     })
     const req = await new Client({ baseUrl }).getSessionRequest('s3', 'r3')
     expect(req.authorized).toBe(false)
+  })
+})
+
+describe('subscribeFirehose', () => {
+  // a minimal fake WebSocket so the firehose parse logic can be exercised WITHOUT a real socket
+  class FakeWebSocket {
+    public onopen: ((ev: Event) => void) | null = null
+    public onmessage: ((ev: { data: string }) => void) | null = null
+    public onerror: ((ev: Event) => void) | null = null
+    public readonly url: string
+    public readonly close = vi.fn()
+    public static instances: FakeWebSocket[] = []
+
+    constructor(url: string) {
+      this.url = url
+      FakeWebSocket.instances.push(this)
+    }
+  }
+
+  beforeEach(() => {
+    FakeWebSocket.instances = []
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const lastWS = (): FakeWebSocket => {
+    const ws = FakeWebSocket.instances.at(-1)
+    if (!ws) {
+      throw new Error('no WebSocket was constructed')
+    }
+    return ws
+  }
+
+  test('connects to ws://<host>/api/firehose/subscribe and resolves a closer on open', async () => {
+    const onConnected = vi.fn()
+    const onEvent = vi.fn<(e: FirehoseEvent) => void>()
+
+    const closerPromise = new Client({ baseUrl }).subscribeFirehose({ onConnected, onEvent })
+
+    const ws = lastWS()
+    expect(ws.url).toBe('ws://localhost/api/firehose/subscribe')
+
+    ws.onopen?.(new Event('open'))
+
+    const closer = await closerPromise
+    expect(onConnected).toHaveBeenCalledTimes(1)
+
+    closer()
+    expect(ws.close).toHaveBeenCalledTimes(1)
+  })
+
+  test('parses a FirehoseEvent message into the typed client model and invokes onEvent', async () => {
+    const onEvent = vi.fn<(e: FirehoseEvent) => void>()
+
+    const p = new Client({ baseUrl }).subscribeFirehose({ onEvent })
+    const ws = lastWS()
+    ws.onopen?.(new Event('open'))
+    await p
+
+    ws.onmessage?.({
+      data: JSON.stringify({
+        session_uuid: 'sess-uuid-1',
+        session_slug: 'my-app',
+        action: 'create',
+        request: {
+          uuid: 'req-uuid-1',
+          client_address: '203.0.113.7',
+          method: 'POST',
+          url: 'https://example.com/w/my-app/path?q=1',
+          captured_at_unix_milli: 1234,
+          authorized: false,
+        },
+      }),
+    })
+
+    expect(onEvent).toHaveBeenCalledTimes(1)
+
+    const ev = onEvent.mock.calls[0][0]
+    expect(ev.sessionUUID).toBe('sess-uuid-1')
+    expect(ev.sessionSlug).toBe('my-app')
+    expect(ev.action).toBe('create')
+    expect(ev.request?.method).toBe('POST')
+    expect(ev.request?.clientAddress).toBe('203.0.113.7')
+    expect(ev.request?.authorized).toBe(false)
+    expect(ev.request?.url.toString()).toBe('https://example.com/w/my-app/path?q=1')
+    expect(ev.request?.capturedAt.getTime()).toBe(1234)
   })
 })
 

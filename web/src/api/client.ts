@@ -141,7 +141,31 @@ type RequestEvent = Readonly<{
     headers: ReadonlyArray<{ name: string; value: string }>
     url: Readonly<URL>
     capturedAt: Readonly<Date>
+    /** False when the request was rejected by inbound auth (it is still captured). */
+    authorized: boolean
   } | null
+}>
+
+/**
+ * A single captured webhook event on the global, cross-session firehose stream. This is the client-side
+ * shape parsed from the OpenAPI `FirehoseEvent` (the cross-session feed currently emits only `create`).
+ */
+export type FirehoseEvent = Readonly<{
+  /** The originating session UUID. */
+  sessionUUID: string
+  /** The originating session slug (human-readable). */
+  sessionSlug: string
+  /** The cross-session feed currently emits only `create`; the others are reserved. */
+  action: components['schemas']['FirehoseEvent']['action']
+  request: Readonly<{
+    uuid: string
+    clientAddress: string
+    method: HttpMethod
+    url: Readonly<URL>
+    capturedAt: Readonly<Date>
+    /** False when the request was rejected by inbound auth (it is still captured). */
+    authorized: boolean
+  }> | null
 }>
 
 export class Client {
@@ -809,6 +833,7 @@ export class Client {
                     headers: Object.freeze(req.request.headers),
                     url: Object.freeze(new URL(req.request.url)),
                     capturedAt: Object.freeze(new Date(req.request.captured_at_unix_milli)),
+                    authorized: req.request.authorized,
                   })
                 : null,
             }
@@ -818,6 +843,82 @@ export class Client {
         }
       } catch (e) {
         // convert any exception to Error
+        const err = e instanceof Error ? e : new Error(String(e))
+
+        if (connected) {
+          onError?.(err)
+        }
+
+        reject(err)
+      }
+    })
+  }
+
+  /**
+   * Subscribes to the GLOBAL cross-session "firehose": a single live stream of every captured webhook
+   * across ALL sessions. Mirrors {@link subscribeToSessionRequests} (ws://→wss:// + cookie auth via the
+   * `wh_token` cookie set at login — the WebSocket cannot send an Authorization header).
+   *
+   * The promise resolves with a closer function that can be called to close the WebSocket connection.
+   */
+  async subscribeFirehose({
+    onConnected,
+    onEvent,
+    onError,
+  }: {
+    onConnected?: () => void // called when the WebSocket connection is established
+    onEvent: (event: FirehoseEvent) => void // called for each captured webhook (any session)
+    onError?: (err: Error) => void // called when an error occurs on an alive connection
+  }): Promise</* closer */ () => void> {
+    const protocol = this.baseUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+    const path: keyof paths = '/api/firehose/subscribe'
+
+    return new Promise((resolve: (closer: () => void) => void, reject: (err: Error) => void) => {
+      let connected: boolean = false
+
+      try {
+        const ws = new WebSocket(`${protocol}//${this.baseUrl.host}${path}`)
+
+        ws.onopen = (): void => {
+          connected = true
+          onConnected?.()
+          resolve((): void => ws.close())
+        }
+
+        ws.onerror = (event: Event): void => {
+          const err = new Error(event instanceof ErrorEvent ? String(event.error) : 'WebSocket error')
+
+          if (connected) {
+            onError?.(err)
+          }
+
+          reject(err) // will be ignored if the promise is already resolved
+        }
+
+        ws.onmessage = (event): void => {
+          if (event.data) {
+            const ev = JSON.parse(event.data) as components['schemas']['FirehoseEvent']
+
+            onEvent(
+              Object.freeze({
+                sessionUUID: ev.session_uuid,
+                sessionSlug: ev.session_slug,
+                action: ev.action,
+                request: ev.request
+                  ? Object.freeze({
+                      uuid: ev.request.uuid,
+                      clientAddress: ev.request.client_address,
+                      method: ev.request.method,
+                      url: Object.freeze(new URL(ev.request.url)),
+                      capturedAt: Object.freeze(new Date(ev.request.captured_at_unix_milli)),
+                      authorized: ev.request.authorized,
+                    })
+                  : null,
+              })
+            )
+          }
+        }
+      } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e))
 
         if (connected) {

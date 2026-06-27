@@ -5,6 +5,7 @@ export {
   type ReplayResult,
   type SessionPatch,
   type SearchMatch,
+  type FirehoseEvent,
 } from './client'
 export {
   type APIError,
@@ -15,4 +16,4 @@ export {
   httpStatusFromError,
 } from './errors'
 export { getStoredToken, setStoredToken, clearStoredToken, onUnauthorized, type TokenProvider } from './auth'
-export { RequestEventAction } from './schema.gen'
+export { RequestEventAction, FirehoseEventAction } from './schema.gen'
