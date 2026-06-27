@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { CodeHighlight } from '@mantine/code-highlight'
-import { Badge, Button, Flex, Grid, Skeleton, Table, Tabs, Text, Title } from '@mantine/core'
-import { useInterval } from '@mantine/hooks'
+import { Badge, Button, Collapse, Divider, Flex, Grid, Skeleton, Table, Tabs, Text, Title } from '@mantine/core'
+import { useDisclosure, useInterval } from '@mantine/hooks'
 import { Link } from 'react-router-dom'
-import { IconBinary, IconDownload, IconLetterCase } from '@tabler/icons-react'
+import { IconBinary, IconDownload, IconLetterCase, IconSend } from '@tabler/icons-react'
 import dayjs from 'dayjs'
 import { useData, UsedStorageKeys, useSettings, useStorage } from '~/shared'
 import { methodToColor } from '~/theme'
+import { ReplayPanel } from '../replay-panel'
 import { ViewHex, ViewText } from './components'
 
 export const RequestDetails: React.FC<{ loading?: boolean }> = ({ loading = false }) => {
@@ -17,11 +18,17 @@ export const RequestDetails: React.FC<{ loading?: boolean }> = ({ loading = fals
   const [elapsedTime, setElapsedTime] = useState<string | null>(null)
   const [contentType, setContentType] = useState<string | null>(null)
   const [payload, setPayload] = useState<Uint8Array | null>(null)
+  const [replayOpened, { toggle: toggleReplay, close: closeReplay }] = useDisclosure(false)
 
   useEffect(
     () => setContentType(request?.headers.find(({ name }) => name.toLowerCase() === 'content-type')?.value ?? null),
     [request]
   )
+
+  // Close the replay panel whenever the user switches to a different request
+  useEffect(() => {
+    closeReplay()
+  }, [request?.rID, closeReplay])
 
   // automatically update the payload
   useEffect(() => {
@@ -165,6 +172,18 @@ export const RequestDetails: React.FC<{ loading?: boolean }> = ({ loading = fals
               Download
             </Button>
           )}
+          {!loading && !!request && !!session && (
+            <Button
+              variant={replayOpened ? 'filled' : 'light'}
+              color="violet"
+              size="compact-sm"
+              ml="sm"
+              leftSection={<IconSend size="1.2em" />}
+              onClick={toggleReplay}
+            >
+              Replay
+            </Button>
+          )}
         </Title>
         {(loading && <Skeleton radius="md" h="8em" w="100%" />) || (
           <Tabs variant="default" defaultValue={TabsList.Text} keepMounted={false}>
@@ -187,6 +206,12 @@ export const RequestDetails: React.FC<{ loading?: boolean }> = ({ loading = fals
               </Tabs.Panel>
             )}
           </Tabs>
+        )}
+        {!!request && !!session && (
+          <Collapse in={replayOpened}>
+            <Divider my="md" label="Replay" labelPosition="left" />
+            <ReplayPanel session={session} request={request} />
+          </Collapse>
         )}
       </Grid.Col>
     </Grid>
