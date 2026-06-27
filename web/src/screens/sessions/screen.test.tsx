@@ -159,4 +159,55 @@ describe('SessionsListScreen', () => {
       expect(screen.getByText(/no sessions/i)).toBeInTheDocument()
     })
   })
+
+  test('Delete: confirms, calls destroySession with the row uuid, awaits the two-phase flow, removes the row', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const slow = vi.fn<() => Promise<void>>(() => Promise.resolve())
+    mockDestroySession.mockResolvedValue(slow)
+
+    renderScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('session-alpha')).toBeInTheDocument()
+    })
+
+    // The first Delete button corresponds to the first row (session-alpha → uuid-1111).
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
+
+    // Phase 1: the local-removal call is made with the row's uuid.
+    await waitFor(() => {
+      expect(mockDestroySession).toHaveBeenCalledWith('uuid-1111-1111-1111-111111111111')
+    })
+
+    // Phase 2: the slow (server) function returned by destroySession is awaited.
+    await waitFor(() => {
+      expect(slow).toHaveBeenCalledTimes(1)
+    })
+
+    // The deleted row is removed from the rendered list.
+    await waitFor(() => {
+      expect(screen.queryByText('session-alpha')).not.toBeInTheDocument()
+    })
+
+    confirmSpy.mockRestore()
+  })
+
+  test('Delete: does NOT call destroySession when the confirm is cancelled', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    renderScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('session-alpha')).toBeInTheDocument()
+    })
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
+
+    expect(mockDestroySession).not.toHaveBeenCalled()
+    expect(screen.getByText('session-alpha')).toBeInTheDocument()
+
+    confirmSpy.mockRestore()
+  })
 })

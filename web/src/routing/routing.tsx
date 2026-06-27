@@ -45,9 +45,7 @@ export const createRoutes = (apiClient: Client): RouteObject[] => [
 
 type RouteParams<T extends RouteIDs> = T extends RouteIDs.SessionAndRequest
   ? [string /* sID */, string? /* rID (optional) */]
-  : T extends RouteIDs.Home | RouteIDs.SessionsList
-    ? [] // no params
-    : [] // no params
+  : [] // no params
 
 /**
  * Converts a route ID to a path to use in a link.

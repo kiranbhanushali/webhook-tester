@@ -7,8 +7,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { SessionSummary } from '~/api'
 import { pathTo, RouteIDs } from '~/routing'
-import { buildWebhookUrl } from '~/shared/utils/webhook-url'
-import { useData } from '~/shared'
+import { buildWebhookUrl, useData } from '~/shared'
 import styles from './screen.module.css'
 
 // Extend dayjs with relative time support (idempotent; main.tsx does this too at runtime)
@@ -31,12 +30,10 @@ const groupSessions = (sessions: ReadonlyArray<SessionSummary>): Map<string, Ses
 
   for (const session of sessions) {
     const key = session.group ?? UNGROUPED_LABEL
+    const arr = result.get(key) ?? []
 
-    if (!result.has(key)) {
-      result.set(key, [])
-    }
-
-    result.get(key)!.push(session)
+    arr.push(session)
+    result.set(key, arr)
   }
 
   return result
@@ -163,7 +160,7 @@ export function SessionsListScreen(): React.JSX.Element {
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {Array.from(grouped.entries()).map(([groupName, groupSessions]) => (
+            {Array.from(grouped.entries()).map(([groupName, groupItems]) => (
               <React.Fragment key={groupName}>
                 {/* Group header row */}
                 <Table.Tr>
@@ -175,7 +172,7 @@ export function SessionsListScreen(): React.JSX.Element {
                 </Table.Tr>
 
                 {/* Session rows in this group */}
-                {groupSessions.map((session) => (
+                {groupItems.map((session) => (
                   <Table.Tr key={session.uuid}>
                     <Table.Td>
                       <Text fw={500} size="sm">
