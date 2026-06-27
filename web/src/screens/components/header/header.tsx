@@ -3,7 +3,6 @@ import { useClipboard, useDisclosure } from '@mantine/hooks'
 import { notifications as notify } from '@mantine/notifications'
 import {
   IconAdjustmentsAlt,
-  IconBrandGithubFilled,
   IconBuildingTunnel,
   IconCirclePlusFilled,
   IconCopy,
@@ -98,8 +97,8 @@ export const Header: React.FC<{
             )}
           </Button.Group>
 
-          <Button.Group visibleFrom="lg">
-            {isUpdateAvailable && !!latestVersion ? (
+          {isUpdateAvailable && !!latestVersion && (
+            <Button.Group visibleFrom="lg">
               <Button
                 variant="default"
                 size="xs"
@@ -111,19 +110,8 @@ export const Header: React.FC<{
               >
                 Update available {!!latestVersion && <>(v{latestVersion.toString()})</>}
               </Button>
-            ) : (
-              <Button
-                variant="default"
-                size="xs"
-                leftSection={<IconBrandGithubFilled size="1.3em" />}
-                component={Link}
-                to={__GITHUB_PROJECT_LINK__}
-                target="_blank"
-              >
-                GitHub
-              </Button>
-            )}
-          </Button.Group>
+            </Button.Group>
+          )}
         </Group>
         <Group visibleFrom="xs">
           <Button.Group>
