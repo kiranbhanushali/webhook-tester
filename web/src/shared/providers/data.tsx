@@ -1,14 +1,31 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { APIErrorNotFound, type Client, RequestEventAction } from '~/api'
-import { Database } from '~/db'
+import {
+  APIErrorNotFound,
+  type Client,
+  RequestEventAction,
+  type ReplayResult,
+  type SearchResultItem,
+  type SessionPatch,
+  type SessionSummary,
+} from '~/api'
+import { Database, type Session as DbSession } from '~/db'
 import { UsedStorageKeys, useSettings, useStorage } from '~/shared'
+import { buildWebhookUrl } from '~/shared/utils/webhook-url'
 
 export type Session = {
+  /** Internal, stable identifier — the session UUID. Used for all API/WebSocket calls and DB keying. */
   sID: string
   responseCode: number
   responseHeaders: Array<{ name: string; value: string }>
   responseDelay: number
   responseBody: Uint8Array
+  /** Human-readable, user-facing slug (null if the server did not assign one). */
+  slug: string | null
+  group: string | null
+  responseScript: string | null
+  securityHeaders: Array<{ name: string; value: string }>
+  forwardUrl: string | null
+  longLived: boolean
 }
 
 export type Request = {
@@ -100,6 +117,30 @@ type DataContext = {
   /** Limit the number of requests by removing the oldest ones, if the count exceeds the limit */
   setRequestsCount(limit: number): void
 
+  /** List all sessions available on the server (optionally filtered by group and/or a free-text query). */
+  listAllSessions(params?: { group?: string; q?: string }): Promise<ReadonlyArray<SessionSummary>>
+
+  /** Search captured-request identifiers by key/value across sessions. */
+  searchIdentifiers(params: {
+    value: string
+    key?: string
+    match?: 'exact' | 'prefix'
+    group?: string
+    session?: string // session reference (uuid or slug)
+    from?: number // unix milliseconds
+    to?: number // unix milliseconds
+    limit?: number
+  }): Promise<ReadonlyArray<SearchResultItem>>
+
+  /**
+   * Update session options by reference (uuid or slug). On success the change is reflected in the local database and,
+   * if it is the current session, in the live session state.
+   */
+  updateSession(ref: string, patch: SessionPatch): Promise<Readonly<Session>>
+
+  /** Replay a captured request to a target URL (defaults to the session's forward URL when omitted). */
+  replayRequest(ref: string, rID: string, targetUrl?: string): Promise<ReplayResult>
+
   /** The URL for the webhook (if session is active) */
   readonly webHookUrl: Readonly<URL> | null
 }
@@ -121,11 +162,31 @@ const dataContext = createContext<DataContext>({
   removeRequest: () => notInitialized(),
   removeAllRequests: () => notInitialized(),
   setRequestsCount: () => notInitialized(),
+  listAllSessions: () => notInitialized(),
+  searchIdentifiers: () => notInitialized(),
+  updateSession: () => notInitialized(),
+  replayRequest: () => notInitialized(),
   webHookUrl: null,
 })
 
 /** Sort requests by the captured time (from newest to oldest) */
 const requestsSorter = <T extends { capturedAt: Date }>(a: T, b: T) => b.capturedAt.getTime() - a.capturedAt.getTime()
+
+/** Build the immutable in-memory session state from a stored (database) session, coalescing the optional new fields. */
+const dbSessionToState = (s: DbSession): Readonly<Session> =>
+  Object.freeze({
+    sID: s.sID,
+    responseCode: s.responseCode,
+    responseDelay: s.responseDelay,
+    responseHeaders: s.responseHeaders,
+    responseBody: s.responseBody,
+    slug: s.slug ?? null,
+    group: s.group ?? null,
+    responseScript: s.responseScript ?? null,
+    securityHeaders: s.securityHeaders ?? [],
+    forwardUrl: s.forwardUrl ?? null,
+    longLived: s.longLived ?? false,
+  })
 
 /** Helper function to get the request payload from the database (lazy-loaded) */
 const payloadGetter = (db: Database, rID: string): { payload: Request['payload'] } => {
@@ -315,23 +376,26 @@ export const DataProvider: React.FC<{
       // add the session ID to the list of all session IDs (update the state)
       setAllSessionIDs((prev) => [...prev, opts.uuid])
 
-      // save the session to the database
-      await db.putSession({
+      // build the database record, carrying the new slug-aware fields from the server response
+      const dbRecord: DbSession = {
         sID: opts.uuid,
         responseCode: statusCode,
         responseDelay: delay,
         responseHeaders: Object.entries(headers).map(([name, value]) => ({ name, value })),
         responseBody,
         createdAt: opts.createdAt,
-      })
+        slug: opts.response.slug || undefined,
+        group: opts.response.group,
+        responseScript: opts.response.responseScript,
+        securityHeaders: [...opts.response.securityHeaders],
+        forwardUrl: opts.response.forwardUrl,
+        longLived: opts.response.longLived,
+      }
 
-      return Object.freeze({
-        sID: opts.uuid,
-        responseCode: statusCode,
-        responseHeaders: Object.entries(headers).map(([name, value]) => ({ name, value })),
-        responseDelay: delay,
-        responseBody,
-      })
+      // save the session to the database
+      await db.putSession(dbRecord)
+
+      return dbSessionToState(dbRecord)
     },
     [api, db]
   )
@@ -426,15 +490,7 @@ export const DataProvider: React.FC<{
 
         if (dbSession) {
           // if the session exists in the database
-          setSession(
-            Object.freeze({
-              sID: dbSession.sID,
-              responseCode: dbSession.responseCode,
-              responseDelay: dbSession.responseDelay,
-              responseHeaders: dbSession.responseHeaders,
-              responseBody: dbSession.responseBody,
-            })
-          )
+          setSession(dbSessionToState(dbSession))
 
           setLastUsedSID(dbSession.sID)
 
@@ -460,27 +516,28 @@ export const DataProvider: React.FC<{
             try {
               const apiSession = await api.getSession(sID)
 
-              // save the session to the database
-              await db.putSession({
+              // build the database record, carrying the new slug-aware fields from the server response
+              const dbRecord: DbSession = {
                 sID: apiSession.uuid,
                 responseCode: apiSession.response.statusCode,
                 responseDelay: apiSession.response.delay,
                 responseHeaders: [...apiSession.response.headers],
                 responseBody: apiSession.response.body,
                 createdAt: apiSession.createdAt,
-              })
+                slug: apiSession.response.slug || undefined,
+                group: apiSession.response.group,
+                responseScript: apiSession.response.responseScript,
+                securityHeaders: [...apiSession.response.securityHeaders],
+                forwardUrl: apiSession.response.forwardUrl,
+                longLived: apiSession.response.longLived,
+              }
+
+              // save the session to the database
+              await db.putSession(dbRecord)
 
               setAllSessionIDs((prev) => [...prev, apiSession.uuid])
 
-              setSession(
-                Object.freeze({
-                  sID: apiSession.uuid,
-                  responseCode: apiSession.response.statusCode,
-                  responseDelay: apiSession.response.delay,
-                  responseHeaders: [...apiSession.response.headers],
-                  responseBody: apiSession.response.body,
-                })
-              )
+              setSession(dbSessionToState(dbRecord))
 
               setLastUsedSID(apiSession.uuid)
 
@@ -725,6 +782,59 @@ export const DataProvider: React.FC<{
     setRequests((prev) => prev.slice(0, limit))
   }, [])
 
+  /** List all sessions available on the server. */
+  const listAllSessions = useCallback<DataContext['listAllSessions']>(
+    (params) => api.listSessions(params),
+    [api]
+  )
+
+  /** Search captured-request identifiers by key/value across sessions. */
+  const searchIdentifiers = useCallback<DataContext['searchIdentifiers']>(
+    (params) => api.searchIdentifiers(params),
+    [api]
+  )
+
+  /** Update session options by reference (uuid or slug); reflects the change in the DB and the live session state. */
+  const updateSession = useCallback<DataContext['updateSession']>(
+    async (ref, patch) => {
+      const opts = await api.updateSession(ref, patch)
+
+      // preserve the original creation time if we already know this session locally
+      const existing = await db.getSession(opts.uuid)
+
+      const dbRecord: DbSession = {
+        sID: opts.uuid,
+        responseCode: opts.response.statusCode,
+        responseDelay: opts.response.delay,
+        responseHeaders: [...opts.response.headers],
+        responseBody: opts.response.body,
+        createdAt: existing?.createdAt ?? opts.createdAt,
+        slug: opts.response.slug || undefined,
+        group: opts.response.group,
+        responseScript: opts.response.responseScript,
+        securityHeaders: [...opts.response.securityHeaders],
+        forwardUrl: opts.response.forwardUrl,
+        longLived: opts.response.longLived,
+      }
+
+      await db.putSession(dbRecord)
+
+      const next = dbSessionToState(dbRecord)
+
+      // if it is the current session, update the live state so the webhook URL and editors reflect the change
+      setSession((prev) => (prev && prev.sID === opts.uuid ? next : prev))
+
+      return next
+    },
+    [api, db]
+  )
+
+  /** Replay a captured request to a target URL (defaults to the session forward URL when omitted). */
+  const replayRequest = useCallback<DataContext['replayRequest']>(
+    (ref, rID, targetUrl) => api.replayRequest(ref, rID, targetUrl),
+    [api]
+  )
+
   // on provider mount
   useEffect(() => {
     // load all session IDs from the database
@@ -767,13 +877,9 @@ export const DataProvider: React.FC<{
   // watch for the session changes and update the webhook URL
   useEffect(() => {
     if (session) {
-      const baseUrl = publicUrlRoot ? new URL(publicUrlRoot.toString()) : new URL(window.location.origin)
-
-      if (!baseUrl.pathname.endsWith('/')) {
-        baseUrl.pathname = `${baseUrl.pathname}/`
-      }
-
-      setWebHookUrl(Object.freeze(new URL(session.sID, baseUrl)))
+      // the user-facing webhook URL lives under the reserved /w/ prefix and uses the slug; it falls back to the uuid
+      // (which the /w/ capture endpoint also accepts) so sessions created before slugs existed keep working.
+      setWebHookUrl(Object.freeze(buildWebhookUrl(publicUrlRoot, session.slug || session.sID)))
     }
   }, [session, publicUrlRoot])
 
@@ -791,6 +897,10 @@ export const DataProvider: React.FC<{
         switchToRequest,
         removeRequest,
         removeAllRequests,
+        listAllSessions,
+        searchIdentifiers,
+        updateSession,
+        replayRequest,
         webHookUrl,
         setRequestsCount,
       }}

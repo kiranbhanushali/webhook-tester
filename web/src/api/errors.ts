@@ -18,6 +18,10 @@ class APIErrorNotFound extends BaseAPIError {
   public readonly description = 'Not found'
 }
 
+class APIErrorUnauthorized extends BaseAPIError {
+  public readonly description = 'Authentication is required (or the provided token is invalid)'
+}
+
 class APIErrorCommon extends BaseAPIError {
   public readonly description = "Something went wrong on the server side, but we can't identify it as a specific error"
 }
@@ -27,4 +31,4 @@ class APIErrorUnknown extends BaseAPIError {
     "Something went wrong, and we don't know what (usually on the client or JS libraries side)"
 }
 
-export { type APIError, APIErrorNotFound, APIErrorCommon, APIErrorUnknown }
+export { type APIError, APIErrorNotFound, APIErrorUnauthorized, APIErrorCommon, APIErrorUnknown }

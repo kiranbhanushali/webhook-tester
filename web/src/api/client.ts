@@ -1,9 +1,41 @@
 import createClient, { type Client as OpenapiClient, type ClientOptions } from 'openapi-fetch'
 import { coerce as semverCoerce, parse as semverParse, type SemVer } from 'semver'
 import { base64ToUint8Array, uint8ArrayToBase64 } from '~/shared'
+import { createAuthMiddleware, getStoredToken, type TokenProvider } from './auth'
 import { APIErrorUnknown } from './errors'
 import { throwIfNotJSON, throwIfNotValidResponse } from './middleware'
-import { components, paths, type RequestEventAction } from './schema.gen'
+import { components, paths, PathsApiSearchGetParametersQueryMatch, type RequestEventAction } from './schema.gen'
+
+/** A single name/value header pair. */
+type Header = Readonly<{ name: string; value: string }>
+
+/**
+ * The shared shape returned by the create/get/update session endpoints.
+ *
+ * Header lists are typed as `ArrayLike<Header>` (rather than `readonly Header[]`) because openapi-fetch wraps response
+ * bodies in its deep-readonly `Readable<>` transform, which turns arrays into array-like objects; `ArrayLike` matches
+ * that and is still accepted by `Array.from(...)`.
+ */
+type SessionOptionsData = {
+  uuid: string
+  response: {
+    status_code: number
+    headers: ArrayLike<Header>
+    delay: number
+    response_body_base64: string
+    slug?: string
+    group?: string
+    response_script?: string
+    security_headers?: ArrayLike<Header>
+    forward_url?: string
+    long_lived?: boolean
+  }
+  created_at_unix_milli: number
+  expires_at_unix_milli?: number
+}
+
+/** The value-match mode for identifier search. */
+export type SearchMatch = 'exact' | 'prefix'
 
 type AppSettings = Readonly<{
   limits: Readonly<{
@@ -22,11 +54,61 @@ type SessionOptions = Readonly<{
   uuid: string
   response: Readonly<{
     statusCode: number
-    headers: ReadonlyArray<{ name: string; value: string }>
+    headers: ReadonlyArray<Header>
     delay: number
     body: Readonly<Uint8Array>
+    /** Human-readable session slug (empty string if the server did not assign one) */
+    slug: string
+    group: string | null
+    responseScript: string | null
+    securityHeaders: ReadonlyArray<Header>
+    forwardUrl: string | null
+    longLived: boolean
   }>
   createdAt: Readonly<Date>
+  expiresAt: Readonly<Date> | null
+}>
+
+/** Summary information about a session, as returned by the sessions-list endpoint. */
+export type SessionSummary = Readonly<{
+  slug: string
+  group: string | null
+  statusCode: number
+  requestsCount: number
+  lastRequestAt: Readonly<Date> | null
+  createdAt: Readonly<Date>
+  expiresAt: Readonly<Date>
+  longLived: boolean
+}>
+
+/** A single identifier-search result, linking a matched key/value to its captured request. */
+export type SearchResultItem = Readonly<{
+  sessionSlug: string
+  requestUUID: string
+  key: string
+  value: string
+  capturedAt: Readonly<Date>
+}>
+
+/** The response received when replaying a captured request to a target URL. */
+export type ReplayResult = Readonly<{
+  statusCode: number
+  headers: ReadonlyArray<Header>
+  body: Readonly<Uint8Array>
+}>
+
+/** Fields that can be patched on an existing session (all optional; omitted fields are left unchanged). */
+export type SessionPatch = Readonly<{
+  statusCode?: number
+  headers?: ReadonlyArray<Header>
+  delay?: number
+  responseBody?: Uint8Array
+  slug?: string
+  group?: string
+  responseScript?: string
+  securityHeaders?: ReadonlyArray<Header>
+  forwardUrl?: string
+  longLived?: boolean
 }>
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS' | 'CONNECT' | 'TRACE' | string
@@ -62,7 +144,14 @@ export class Client {
     settings: AppSettings
   }> = {}
 
-  constructor(opt?: ClientOptions) {
+  private readonly getToken: TokenProvider
+
+  /**
+   * @param opt      openapi-fetch client options (e.g. `baseUrl`).
+   * @param getToken Provider for the API auth token; defaults to the persisted token. When it returns a non-empty
+   *                 token, an `Authorization: Bearer <token>` header is attached to every request.
+   */
+  constructor(opt?: ClientOptions, getToken: TokenProvider = getStoredToken) {
     const baseUrl: string | null = opt?.baseUrl
       ? opt.baseUrl
       : typeof window !== 'undefined' // for non-browser environments, like tests
@@ -74,9 +163,65 @@ export class Client {
     }
 
     this.baseUrl = new URL(baseUrl)
+    this.getToken = getToken
 
     this.api = createClient<paths>({ ...opt, baseUrl: baseUrl.toString() })
-    this.api.use(throwIfNotJSON, throwIfNotValidResponse)
+    // the auth middleware is registered first so its onRequest runs first (attaching the Bearer header before the
+    // request is sent); the response validators run afterwards and surface 401s as APIErrorUnauthorized.
+    this.api.use(createAuthMiddleware(this.getToken), throwIfNotJSON, throwIfNotValidResponse)
+  }
+
+  /** Maps the wire shape of the create/get/update session response into the immutable client model. */
+  private static mapSessionOptions(data: SessionOptionsData): SessionOptions {
+    return Object.freeze({
+      uuid: data.uuid,
+      response: Object.freeze({
+        statusCode: data.response.status_code,
+        headers: Array.from(data.response.headers).map(({ name, value }) => Object.freeze({ name, value })),
+        delay: data.response.delay,
+        body: base64ToUint8Array(data.response.response_body_base64),
+        slug: data.response.slug ?? '',
+        group: data.response.group ?? null,
+        responseScript: data.response.response_script ?? null,
+        securityHeaders: Array.from(data.response.security_headers ?? []).map(({ name, value }) =>
+          Object.freeze({ name, value })
+        ),
+        forwardUrl: data.response.forward_url ?? null,
+        longLived: data.response.long_lived ?? false,
+      }),
+      createdAt: Object.freeze(new Date(data.created_at_unix_milli)),
+      expiresAt: data.expires_at_unix_milli ? Object.freeze(new Date(data.expires_at_unix_milli)) : null,
+    })
+  }
+
+  /**
+   * Logs in with the given shared token: POSTs `/api/auth/login` so the server sets the `wh_token` cookie (required by
+   * the WebSocket, which cannot send an Authorization header). Persisting the token for the Bearer middleware is the
+   * caller's responsibility (see the AuthProvider).
+   *
+   * Returns `true` on success (HTTP 200), `false` when the token is rejected (HTTP 401).
+   *
+   * NOTE: this endpoint is intentionally outside the generated OpenAPI schema, so it is called via a raw `fetch`.
+   *
+   * @throws {Error} on network failures or unexpected status codes.
+   */
+  async login(token: string): Promise<boolean> {
+    const resp = await fetch(new URL('/api/auth/login', this.baseUrl).toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', // so the Set-Cookie (wh_token) is stored for the WebSocket
+      body: JSON.stringify({ token }),
+    })
+
+    if (resp.status === 401) {
+      return false
+    }
+
+    if (!resp.ok) {
+      throw new Error(`Login failed: ${resp.status} ${resp.statusText}`)
+    }
+
+    return true
   }
 
   /**
@@ -193,41 +338,235 @@ export class Client {
     })
 
     if (data) {
-      return Object.freeze({
-        uuid: data.uuid,
-        response: Object.freeze({
-          statusCode: data.response.status_code,
-          headers: Array.from(data.response.headers).map(({ name, value }) => Object.freeze({ name, value })),
-          delay: data.response.delay,
-          body: base64ToUint8Array(data.response.response_body_base64),
-        }),
-        createdAt: Object.freeze(new Date(data.created_at_unix_milli)),
-      })
+      return Client.mapSessionOptions(data)
     }
 
     throw new APIErrorUnknown({ message: response.statusText, response })
   }
 
   /**
-   * Returns the session by its ID.
+   * Returns the session by its reference (UUID or slug).
    *
    * @throws {APIError}
    */
-  async getSession(sID: string): Promise<SessionOptions> {
+  async getSession(ref: string): Promise<SessionOptions> {
     const { data, response } = await this.api.GET(`/api/session/{session_uuid}`, {
-      params: { path: { session_uuid: sID } },
+      params: { path: { session_uuid: ref } },
     })
 
     if (data) {
+      return Client.mapSessionOptions(data)
+    }
+
+    throw new APIErrorUnknown({ message: response.statusText, response })
+  }
+
+  /**
+   * Returns the list of all sessions available on the server, optionally filtered by group and/or a free-text query
+   * (case-sensitive substring of the id, slug or group name).
+   *
+   * @throws {APIError}
+   */
+  async listSessions(params?: { group?: string; q?: string }): Promise<ReadonlyArray<SessionSummary>> {
+    const query: { group?: string; q?: string } = {}
+
+    if (params?.group) {
+      query.group = params.group
+    }
+
+    if (params?.q) {
+      query.q = params.q
+    }
+
+    const { data, response } = await this.api.GET('/api/sessions', { params: { query } })
+
+    if (data) {
+      return Object.freeze(
+        Array.from(data).map((s) =>
+          Object.freeze({
+            slug: s.slug,
+            group: s.group ?? null,
+            statusCode: s.status_code,
+            requestsCount: s.requests_count,
+            lastRequestAt: s.last_request_unix_milli ? Object.freeze(new Date(s.last_request_unix_milli)) : null,
+            createdAt: Object.freeze(new Date(s.created_at_unix_milli)),
+            expiresAt: Object.freeze(new Date(s.expires_at_unix_milli)),
+            longLived: s.long_lived,
+          })
+        )
+      )
+    }
+
+    throw new APIErrorUnknown({ message: response.statusText, response })
+  }
+
+  /**
+   * Searches captured-request identifiers by key/value across sessions.
+   *
+   * @throws {APIError}
+   */
+  async searchIdentifiers(params: {
+    value: string
+    key?: string
+    match?: SearchMatch
+    group?: string
+    session?: string // session reference (uuid or slug) to restrict the search to
+    from?: number // lower bound on capture time (unix milliseconds)
+    to?: number // upper bound on capture time (unix milliseconds)
+    limit?: number
+  }): Promise<ReadonlyArray<SearchResultItem>> {
+    const query: {
+      value: string
+      key?: string
+      match?: PathsApiSearchGetParametersQueryMatch
+      group?: string
+      session?: string
+      from?: number
+      to?: number
+      limit?: number
+    } = { value: params.value }
+
+    if (params.key) {
+      query.key = params.key
+    }
+
+    if (params.match) {
+      query.match =
+        params.match === 'prefix'
+          ? PathsApiSearchGetParametersQueryMatch.prefix
+          : PathsApiSearchGetParametersQueryMatch.exact
+    }
+
+    if (params.group) {
+      query.group = params.group
+    }
+
+    if (params.session) {
+      query.session = params.session
+    }
+
+    if (typeof params.from === 'number') {
+      query.from = params.from
+    }
+
+    if (typeof params.to === 'number') {
+      query.to = params.to
+    }
+
+    if (typeof params.limit === 'number') {
+      query.limit = params.limit
+    }
+
+    const { data, response } = await this.api.GET('/api/search', { params: { query } })
+
+    if (data) {
+      return Object.freeze(
+        Array.from(data).map((item) =>
+          Object.freeze({
+            sessionSlug: item.session_slug,
+            requestUUID: item.request_uuid,
+            key: item.key,
+            value: item.value,
+            capturedAt: Object.freeze(new Date(item.captured_at_unix_milli)),
+          })
+        )
+      )
+    }
+
+    throw new APIErrorUnknown({ message: response.statusText, response })
+  }
+
+  /**
+   * Updates session options by reference (UUID or slug). Only the provided fields are sent; omitted fields are left
+   * unchanged on the server.
+   *
+   * @throws {APIError}
+   */
+  async updateSession(ref: string, patch: SessionPatch): Promise<SessionOptions> {
+    const body: {
+      status_code?: number
+      headers?: Array<Header>
+      delay?: number
+      response_body_base64?: string
+      slug?: string
+      group?: string
+      response_script?: string
+      security_headers?: Array<Header>
+      forward_url?: string
+      long_lived?: boolean
+    } = {}
+
+    if (typeof patch.statusCode === 'number') {
+      body.status_code = Math.min(Math.max(100, patch.statusCode), 530) // clamp to the valid range
+    }
+
+    if (patch.headers) {
+      body.headers = patch.headers.map(({ name, value }) => ({ name, value }))
+    }
+
+    if (typeof patch.delay === 'number') {
+      body.delay = Math.min(Math.max(0, patch.delay), 30) // clamp to the valid range
+    }
+
+    if (patch.responseBody) {
+      body.response_body_base64 = uint8ArrayToBase64(patch.responseBody)
+    }
+
+    if (patch.slug !== undefined) {
+      body.slug = patch.slug
+    }
+
+    if (patch.group !== undefined) {
+      body.group = patch.group
+    }
+
+    if (patch.responseScript !== undefined) {
+      body.response_script = patch.responseScript
+    }
+
+    if (patch.securityHeaders) {
+      body.security_headers = patch.securityHeaders.map(({ name, value }) => ({ name, value }))
+    }
+
+    if (patch.forwardUrl !== undefined) {
+      body.forward_url = patch.forwardUrl
+    }
+
+    if (patch.longLived !== undefined) {
+      body.long_lived = patch.longLived
+    }
+
+    const { data, response } = await this.api.PATCH('/api/session/{session_uuid}', {
+      params: { path: { session_uuid: ref } },
+      body,
+    })
+
+    if (data) {
+      return Client.mapSessionOptions(data)
+    }
+
+    throw new APIErrorUnknown({ message: response.statusText, response })
+  }
+
+  /**
+   * Replays a captured request to a target URL. When `targetUrl` is omitted, the server replays to the session's
+   * configured forward URL (and errors if neither is set).
+   *
+   * @throws {APIError}
+   */
+  async replayRequest(ref: string, rID: string, targetUrl?: string): Promise<ReplayResult> {
+    const { data, response } = await this.api.POST(
+      '/api/session/{session_uuid}/requests/{request_uuid}/replay',
+      targetUrl
+        ? { params: { path: { session_uuid: ref, request_uuid: rID } }, body: { target_url: targetUrl } }
+        : { params: { path: { session_uuid: ref, request_uuid: rID } } }
+    )
+
+    if (data) {
       return Object.freeze({
-        uuid: data.uuid,
-        response: Object.freeze({
-          statusCode: data.response.status_code,
-          headers: Array.from(data.response.headers).map(({ name, value }) => Object.freeze({ name, value })),
-          delay: data.response.delay,
-          body: base64ToUint8Array(data.response.response_body_base64),
-        }),
-        createdAt: Object.freeze(new Date(data.created_at_unix_milli)),
+        statusCode: data.status_code,
+        headers: Array.from(data.headers).map(({ name, value }) => Object.freeze({ name, value })),
+        body: base64ToUint8Array(data.body_base64),
       })
     }
 

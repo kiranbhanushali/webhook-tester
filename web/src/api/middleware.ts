@@ -1,5 +1,6 @@
 import type { Middleware } from 'openapi-fetch'
-import { APIErrorCommon, APIErrorNotFound } from './errors'
+import { notifyUnauthorized } from './auth'
+import { APIErrorCommon, APIErrorNotFound, APIErrorUnauthorized } from './errors'
 
 /** This middleware throws an error if the response is not JSON. */
 export const throwIfNotJSON: Middleware = {
@@ -58,6 +59,11 @@ export const throwIfNotValidResponse: Middleware = {
 
     // handle some common HTTP status codes
     switch (response.status) {
+      case 401:
+        // notify any listeners (e.g. the AuthProvider) so the UI can prompt for a token, then throw a typed error
+        notifyUnauthorized()
+        throw new APIErrorUnauthorized({ message, response: response })
+
       case 404:
         throw new APIErrorNotFound({ message, response: response })
     }

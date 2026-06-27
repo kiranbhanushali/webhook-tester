@@ -10,7 +10,7 @@ import hljs from 'highlight.js/lib/core'
 import { Client } from '~/api'
 import { Database } from '~/db'
 import { createRoutes } from '~/routing'
-import { BrowserNotificationsProvider, DataProvider, SettingsProvider } from './shared'
+import { AuthProvider, BrowserNotificationsProvider, DataProvider, SettingsProvider } from './shared'
 import { initializeHighlightJs } from '~/theme'
 import '~/theme/highlight.css'
 import '@mantine/core/styles.css'
@@ -33,11 +33,13 @@ const App = (): React.JSX.Element => {
       <CodeHighlightAdapterProvider adapter={highlightJsAdapter}>
         <Notifications />
         <BrowserNotificationsProvider>
-          <SettingsProvider>
-            <DataProvider api={api} db={db} errHandler={console.error}>
-              <RouterProvider router={createBrowserRouter(createRoutes(api))} />
-            </DataProvider>
-          </SettingsProvider>
+          <AuthProvider api={api}>
+            <SettingsProvider>
+              <DataProvider api={api} db={db} errHandler={console.error}>
+                <RouterProvider router={createBrowserRouter(createRoutes(api))} />
+              </DataProvider>
+            </SettingsProvider>
+          </AuthProvider>
         </BrowserNotificationsProvider>
       </CodeHighlightAdapterProvider>
     </MantineProvider>

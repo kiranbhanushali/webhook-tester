@@ -9,7 +9,29 @@ export class Database {
   constructor() {
     // create database
     this.dexie = new Dexie('webhook-tester-v2-db') // https://dexie.org/docs/Typescript
-    this.dexie.version(1).stores({ ...sessionsSchema, ...requestsSchema })
+
+    // v1: the original schema (sessions keyed by `&sID`, requests by `&rID, sID`)
+    this.dexie.version(1).stores({ sessions: '&sID', ...requestsSchema })
+
+    // v2: adds the `slug` secondary index to the sessions table for the new slug-aware fields. The non-indexed fields
+    // (slug, group, responseScript, securityHeaders, forwardUrl, longLived) need no schema change (Dexie is schemaless
+    // for non-indexed props); the upgrade backfills sane defaults so older rows have a consistent shape.
+    this.dexie
+      .version(2)
+      .stores({ ...sessionsSchema })
+      .upgrade((tx) =>
+        tx
+          .table<Session, string>('sessions')
+          .toCollection()
+          .modify((session) => {
+            session.slug ??= undefined
+            session.group ??= null
+            session.responseScript ??= null
+            session.securityHeaders ??= []
+            session.forwardUrl ??= null
+            session.longLived ??= false
+          })
+      )
 
     // assign tables
     this.sessions = this.dexie.table('sessions')
@@ -44,6 +66,19 @@ export class Database {
   async getSession(sID: string): Promise<Session | null> {
     return this.dexie.transaction('r', this.sessions, async () => {
       return (await this.sessions.get(sID)) || null
+    })
+  }
+
+  /**
+   * Get a session by its slug (the user-facing identifier), or null if no locally-known session has that slug.
+   */
+  async getSessionBySlug(slug: string): Promise<Session | null> {
+    if (!slug) {
+      return null
+    }
+
+    return this.dexie.transaction('r', this.sessions, async () => {
+      return (await this.sessions.where('slug').equals(slug).first()) || null
     })
   }
 

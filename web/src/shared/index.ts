@@ -1,5 +1,7 @@
 export { base64ToUint8Array, uint8ArrayToBase64 } from './utils/encoding'
+export { buildWebhookUrl, WEBHOOK_URL_PREFIX } from './utils/webhook-url'
 export { useStorage, UsedStorageKeys, type StorageArea } from './hooks/use-storage'
 export { BrowserNotificationsProvider, useBrowserNotifications } from './providers/browser-notifications'
 export { SettingsProvider, useSettings } from './providers/settings'
-export { DataProvider, useData, type Request, type SessionEvents } from './providers/data'
+export { AuthProvider, useAuth } from './providers/auth'
+export { DataProvider, useData, type Request, type Session, type SessionEvents } from './providers/data'
