@@ -1,0 +1,7 @@
+.container {
+  padding-bottom: var(--mantine-spacing-xl);
+}
+
+.groupHeaderCell {
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6));
+}

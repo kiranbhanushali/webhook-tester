@@ -71,6 +71,7 @@ type SessionOptions = Readonly<{
 
 /** Summary information about a session, as returned by the sessions-list endpoint. */
 export type SessionSummary = Readonly<{
+  uuid: string
   slug: string
   group: string | null
   statusCode: number
@@ -385,6 +386,7 @@ export class Client {
       return Object.freeze(
         Array.from(data).map((s) =>
           Object.freeze({
+            uuid: s.uuid,
             slug: s.slug,
             group: s.group ?? null,
             statusCode: s.status_code,

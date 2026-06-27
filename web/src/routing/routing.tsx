@@ -4,10 +4,12 @@ import { DefaultLayout } from '~/screens'
 import { NotFoundScreen } from '~/screens/not-found'
 import { SessionAndRequestScreen } from '~/screens/session'
 import { HomeScreen } from '~/screens/home'
+import { SessionsListScreen } from '~/screens/sessions'
 
 export enum RouteIDs {
   Home = 'home',
   SessionAndRequest = 'session-and-request',
+  SessionsList = 'sessions-list',
 }
 
 export const createRoutes = (apiClient: Client): RouteObject[] => [
@@ -32,13 +34,20 @@ export const createRoutes = (apiClient: Client): RouteObject[] => [
         id: RouteIDs.SessionAndRequest,
         element: <SessionAndRequestScreen />,
       },
+      {
+        path: 'sessions',
+        id: RouteIDs.SessionsList,
+        element: <SessionsListScreen />,
+      },
     ],
   },
 ]
 
 type RouteParams<T extends RouteIDs> = T extends RouteIDs.SessionAndRequest
   ? [string /* sID */, string? /* rID (optional) */]
-  : [] // no params
+  : T extends RouteIDs.Home | RouteIDs.SessionsList
+    ? [] // no params
+    : [] // no params
 
 /**
  * Converts a route ID to a path to use in a link.
@@ -55,6 +64,8 @@ export function pathTo<T extends RouteIDs>(
   switch (path) {
     case RouteIDs.Home:
       return createPath({ pathname: '/' })
+    case RouteIDs.SessionsList:
+      return createPath({ pathname: '/sessions' })
     case RouteIDs.SessionAndRequest: {
       const [sID, rID] = [params[0] ?? 'no-session', params[1]]
 

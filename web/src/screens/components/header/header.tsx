@@ -8,6 +8,7 @@ import {
   IconCirclePlusFilled,
   IconCopy,
   IconHelpHexagonFilled,
+  IconList,
   IconRefreshAlert,
   IconUsersGroup,
 } from '@tabler/icons-react'
@@ -15,6 +16,7 @@ import React, { useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import type { SemVer } from 'semver'
 import LogoTextSvg from '~/assets/logo-text.svg'
+import { pathTo, RouteIDs } from '~/routing'
 import { useData, useSettings } from '~/shared'
 import { HelpModal, NewSessionModal, SessionSwitch, UISettings } from './components'
 
@@ -70,6 +72,16 @@ export const Header: React.FC<{
               onClick={helpModalHandlers.open}
             >
               Help
+            </Button>
+
+            <Button
+              variant="default"
+              size="xs"
+              leftSection={<IconList size="1.3em" />}
+              component={Link}
+              to={pathTo(RouteIDs.SessionsList)}
+            >
+              Sessions
             </Button>
 
             {tunnelEnabled && !!tunnelUrl && window.location.hostname !== tunnelUrl.hostname && (
