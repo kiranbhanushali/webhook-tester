@@ -3,6 +3,7 @@ package session_create_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
@@ -88,6 +89,30 @@ func TestHandler_DuplicateUserSlugReturns409(t *testing.T) {
 	h := session_create.New(db)
 
 	_, err := h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("dup")})
+	require.NoError(t, err)
+
+	_, err = h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("dup")})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, shared.ErrConflict), "expected conflict, got %v", err)
+}
+
+// SQLite is the production default storage; this proves a duplicate user slug on
+// create surfaces a conflict end-to-end through the real backend (the dispatch
+// layer maps it to HTTP 409 — see TestStatusForError in the http package).
+func TestHandler_DuplicateUserSlugReturns409_SQLite(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	dsn := filepath.Join(t.TempDir(), "create.sqlite")
+	db, err := storage.NewSQLite(ctx, dsn, time.Minute, 8)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	h := session_create.New(db)
+
+	_, err = h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("dup")})
 	require.NoError(t, err)
 
 	_, err = h.Handle(ctx, openapi.CreateSessionRequest{StatusCode: 200, Slug: strPtr("dup")})

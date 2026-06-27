@@ -15,15 +15,20 @@
 // The hot path is taken only when ALL of the following hold; otherwise the query
 // falls back to durable storage:
 //
-//   - a hot index was injected (non-nil), and
+//   - a hot index was injected (non-nil) AND it has been warm-started
+//     (Warmed()); an empty, never-rebuilt index served right after a restart
+//     would silently return incomplete results, so it must not be trusted, and
 //   - match == exact (prefix needs a full scan), and
 //   - a concrete key is supplied (the hot index is keyed; "any key" needs a scan), and
 //   - no group filter is set (the hot index cannot filter by group), and
-//   - no explicit `from` reaches back beyond the retained window.
+//   - an explicit, recent lower bound is set: `from` > 0 AND `from >= now - window`.
+//     An unbounded query (`from == 0`) is an ALL-TIME query that the bounded
+//     (e.g. 7-day) hot index cannot answer completely, so it goes to storage.
 //
 // A session filter is honored on either path (the hot index Ref carries a
-// SessionID). When the hot index and window are nil/zero (e.g. before Task 10
-// wires them) every query uses durable storage.
+// SessionID). When the hot index is nil or not yet warmed (e.g. before Task 10
+// wires the warm-up) every query uses durable storage — correct and
+// restart-safe.
 package search
 
 import (
@@ -115,7 +120,7 @@ func (h *Handler) Handle(ctx context.Context, p openapi.ApiSearchParams) (*opena
 // answer q (see the package doc for the rationale behind each condition).
 func (h *Handler) useHotPath(q storage.IdentifierQuery) bool {
 	switch {
-	case h.hot == nil:
+	case h.hot == nil || !h.hot.Warmed():
 		return false
 	case q.Match != storage.IdentifierMatchExact:
 		return false
@@ -123,7 +128,11 @@ func (h *Handler) useHotPath(q storage.IdentifierQuery) bool {
 		return false
 	case q.Group != "":
 		return false
-	case q.FromUnixMilli > 0 && q.FromUnixMilli < time.Now().Add(-h.window).UnixMilli():
+	case q.FromUnixMilli <= 0:
+		// Unbounded (all-time) query: the bounded hot index cannot be complete.
+		return false
+	case q.FromUnixMilli < time.Now().Add(-h.window).UnixMilli():
+		// Lower bound reaches back beyond the retained window.
 		return false
 	default:
 		return true

@@ -37,6 +37,7 @@ type HotIndex struct {
 	mu     sync.RWMutex
 	index  map[string][]Ref // composite key → refs (unsorted; sorted at read time)
 	window time.Duration
+	warmed bool // true once warm-started from durable storage (Rebuild/MarkWarm)
 }
 
 // New returns a new HotIndex that retains refs captured within the given window.
@@ -51,6 +52,26 @@ func New(window time.Duration) *HotIndex {
 // (e.g. the search handler) use it to decide whether a time-bounded query can be
 // satisfied from the hot index or must fall back to durable storage.
 func (h *HotIndex) Window() time.Duration { return h.window }
+
+// Warmed reports whether the index has been warm-started from durable storage.
+// Readers (e.g. the search handler) must NOT trust the hot index for results
+// until it is warmed, otherwise a freshly-constructed (empty) index served right
+// after a restart would silently return incomplete/empty results.
+func (h *HotIndex) Warmed() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	return h.warmed
+}
+
+// MarkWarm marks the index as warm-started. It is for callers that populate the
+// index incrementally (rather than via a single Rebuild) and want to signal that
+// the back-fill is complete.
+func (h *HotIndex) MarkWarm() {
+	h.mu.Lock()
+	h.warmed = true
+	h.mu.Unlock()
+}
 
 // compositeKey builds the internal map key from an already-normalized (lower-case) key
 // and a value.
@@ -138,7 +159,8 @@ func (h *HotIndex) Evict(now time.Time) {
 }
 
 // Rebuild replaces the entire index with the provided map.  This is intended
-// for startup warm-up from a durable store.
+// for startup warm-up from a durable store, and marks the index as warmed so
+// readers may trust it.
 //
 // CONTRACT: The keys in refs must already be in the normalized composite
 // format lower(key)+"\x00"+value.  Rebuild does not re-normalize them.
@@ -152,5 +174,6 @@ func (h *HotIndex) Rebuild(refs map[string][]Ref) {
 
 	h.mu.Lock()
 	h.index = newIndex
+	h.warmed = true
 	h.mu.Unlock()
 }

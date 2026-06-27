@@ -377,7 +377,9 @@ func statusForError(err error) int {
 	switch {
 	case errors.Is(err, shared.ErrBadRequest):
 		return http.StatusBadRequest
-	case errors.Is(err, shared.ErrConflict):
+	case errors.Is(err, shared.ErrConflict), errors.Is(err, storage.ErrSlugConflict):
+		// shared.ErrConflict: handler-level pre-check; storage.ErrSlugConflict: the
+		// storage unique-slug index (the real guard against the check-then-create race).
 		return http.StatusConflict
 	case errors.Is(err, storage.ErrNotFound):
 		return http.StatusNotFound
