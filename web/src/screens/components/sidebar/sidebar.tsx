@@ -3,7 +3,7 @@ import { Button, Center, Image, Loader, Stack, Text } from '@mantine/core'
 import { IconTrash } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { pathTo, RouteIDs } from '~/routing'
-import { Request, Navigator } from './components'
+import { Request, Navigator, SessionSearch } from './components'
 import PandaSvg from '~/assets/panda.svg'
 import { useData } from '~/shared'
 
@@ -48,60 +48,67 @@ export const SideBar = (): React.JSX.Element => {
 
   return (
     <Stack align="stretch" justify="flex-start" gap="xs">
-      {(!!session &&
-        ((!!requests.length && (
-          <>
-            <Navigator />
+      {session ? (
+        <SessionSearch sessionUUID={session.sID}>
+          {requests.length > 0 ? (
+            <>
+              <Navigator />
 
-            {requests.map((rq) => {
-              const isActive = request?.rID === rq.rID
+              {requests.map((rq) => {
+                const isActive = request?.rID === rq.rID
 
-              return (
-                <Request
-                  sID={session.sID}
-                  request={rq}
-                  key={rq.rID}
-                  isActive={isActive}
-                  componentRef={isActive ? activeRequestRef : null}
-                />
-              )
-            })}
+                return (
+                  <Request
+                    sID={session.sID}
+                    request={rq}
+                    key={rq.rID}
+                    isActive={isActive}
+                    componentRef={isActive ? activeRequestRef : null}
+                  />
+                )
+              })}
 
-            {hasMoreRequests && (
-              <Center ref={sentinelRef} py="xs" data-testid="requests-load-more">
-                <Loader color="dimmed" size="xs" mr={8} />
-                <Text c="dimmed" size="xs">
-                  Loading older requests…
-                </Text>
-              </Center>
-            )}
+              {hasMoreRequests && (
+                <Center ref={sentinelRef} py="xs" data-testid="requests-load-more">
+                  <Loader color="dimmed" size="xs" mr={8} />
+                  <Text c="dimmed" size="xs">
+                    Loading older requests…
+                  </Text>
+                </Center>
+              )}
 
-            {requests.length > 1 && (
-              <Center>
-                <Button
-                  leftSection={<IconTrash size="1em" />}
-                  size="compact-xs"
-                  variant="outline"
-                  color="red"
-                  px="xs"
-                  mb="sm"
-                  radius="xl"
-                  opacity={0.7}
-                  onClick={() => {
-                    removeAllRequests(session.sID)
-                      .then((slow) => slow())
-                      .then(() =>
-                        // navigate to the session screen
-                        navigate(pathTo(RouteIDs.SessionAndRequest, session.sID))
-                      )
-                  }}
-                >
-                  Delete all requests
-                </Button>
-              </Center>
-            )}
-          </>
-        )) || <NoRequests />)) || <NoSession />}
+              {requests.length > 1 && (
+                <Center>
+                  <Button
+                    leftSection={<IconTrash size="1em" />}
+                    size="compact-xs"
+                    variant="outline"
+                    color="red"
+                    px="xs"
+                    mb="sm"
+                    radius="xl"
+                    opacity={0.7}
+                    onClick={() => {
+                      removeAllRequests(session.sID)
+                        .then((slow) => slow())
+                        .then(() =>
+                          // navigate to the session screen
+                          navigate(pathTo(RouteIDs.SessionAndRequest, session.sID))
+                        )
+                    }}
+                  >
+                    Delete all requests
+                  </Button>
+                </Center>
+              )}
+            </>
+          ) : (
+            <NoRequests />
+          )}
+        </SessionSearch>
+      ) : (
+        <NoSession />
+      )}
     </Stack>
   )
 }

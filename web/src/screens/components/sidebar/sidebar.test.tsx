@@ -17,6 +17,7 @@ const { dataMock } = vi.hoisted(() => ({
     removeRequest: vi.fn(),
     loadMoreRequests: vi.fn(),
     hasMoreRequests: false,
+    searchIdentifiers: vi.fn().mockResolvedValue([]),
   },
 }))
 
