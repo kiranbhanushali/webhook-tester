@@ -29,8 +29,14 @@ the UI - no need for third-party solutions like `pusher.com`!
 
 ### 🔥 Features list
 
-- Standalone operation with in-memory storage/pubsub - no third-party dependencies needed
+- Standalone operation with no third-party dependencies needed (persistent **SQLite** storage by default; memory/Redis/fs also available)
 - Fully customizable response code, headers, and body for webhooks
+- **Dynamic response templates** (Go `text/template`) with signing helpers (e.g. `hmacSHA256`) and an `@status` directive
+- **Human-readable session slugs** and **groups**, plus optional **long-lived** (non-expiring) sessions
+- **Identifier search** across captured requests (e.g. by `trackingId` / `referenceId`), index-backed on SQLite
+- **FIFO events API** with a durable offset cursor for no-skip / no-duplicate incremental polling
+- **Replay** any captured request to a target URL (or the session's forward URL)
+- **Per-session security headers** applied to every response, and an optional **shared-token auth** for the dashboard/API
 - Option to expose your locally running instance to the global internet (via tunneling)
 - Fast, built-in UI based on `ReactJS`
 - Multi-architecture Docker image based on `scratch`
@@ -47,13 +53,22 @@ the UI - no need for third-party solutions like `pusher.com`!
 
 ### 🗃 Storage
 
-The app supports 3 storage drivers: **memory**, **Redis** and **fs** (configured with the `--storage-driver` flag).
+The app supports 4 storage drivers: **sqlite** (default), **memory**, **Redis** and **fs** (configured with the
+`--storage-driver` flag).
 
+- **SQLite** driver (**default**): A single embedded database file (`--sqlite-path`, default `./webhook-tester.db`)
+  using the pure-Go `modernc.org/sqlite` engine (no CGO). Data survives restarts and, crucially, identifier search
+  (see below) is **fully indexed**, so it stays fast over long histories. This is the recommended driver for the
+  callback-debugging workflow.
 - **Memory** driver: Ideal for local debugging when persistent storage isn’t needed, as recorded requests are cleared
-  upon app shutdown
+  upon app shutdown. Identifier search falls back to a non-indexed scan.
 - **Redis** driver: Retains data across app restarts, suitable for environments where data persistence is required.
-  Redis is also necessary when running multiple instances behind a load balancer
-- **FS** driver: Keep all the data in the local filesystem, useful when you need to store data between app restarts
+  Redis is also necessary when running multiple instances behind a load balancer.
+- **FS** driver: Keep all the data in the local filesystem, useful when you need to store data between app restarts.
+
+> [!NOTE]
+> When running the Docker image with the sqlite driver, point `SQLITE_PATH` at a writable, mounted volume (e.g.
+> `-e SQLITE_PATH=/data/wh.db -v "$(pwd)/.wh-data:/data"`); the image’s root filesystem is read-only.
 
 ### 📢 Pub/Sub
 
@@ -70,6 +85,169 @@ the app automatically creates the tunnel for you – no need to install or run `
 
 With this public URL, you can test your webhooks from external services like GitHub, GitLab, Bitbucket, and more.
 You'll never miss a request!
+
+## 🛰 Sessions, search, events, replay & dynamic responses
+
+Beyond the basic capture-and-inspect flow, this build adds a set of capabilities aimed at debugging real,
+long-running callback integrations (capturing provider callbacks, finding a specific transaction, signing
+responses, and re-delivering a captured request). All of the dashboard/data endpoints below live under `/api`
+and are protected by the optional shared token (see [Authentication](#-authentication)); the webhook-capture
+path `/w/...` is always public.
+
+### Webhook capture URL, slugs & groups
+
+Send (capture) a webhook with any HTTP method to:
+
+```
+http(s)://<host>/w/{ref}/<anything you like>
+```
+
+- `{ref}` is either a **slug** or a session **UUID**. A slug is human-readable (2–49 chars, lowercase letters,
+  digits and dashes, must start with a letter or digit), e.g. `my-callback`. If you don't supply a slug when
+  creating a session, one is generated for you. The session remains addressable by its UUID as well.
+- Any trailing numeric path segment overrides the response status code, e.g. `POST /w/my-callback/orders/202`
+  responds with `202`. The last numeric segment wins.
+- **Groups** are an optional label (`group`) used to organise sessions; the listing endpoint can filter by group.
+- **Long-lived** sessions (`long_lived: true`) ignore the normal `--session-ttl` expiry, so a fixed callback URL
+  stays valid indefinitely.
+
+### Listing sessions
+
+`GET /api/sessions` returns every session with its `uuid`, `slug`, `group`, `status_code`, `requests_count`,
+`last_request_unix_milli`, timestamps and `long_lived`. Optional query params: `group` (exact match) and `q`
+(case-sensitive substring over id/slug/group).
+
+### Identifier search
+
+At capture time the app extracts **searchable identifiers** from each request and indexes them. By default it looks
+for the keys `trackingId` and `referenceId` (configurable via `--identifier-keys`) in the **JSON body** and the
+**URL query string**, plus any **header** names listed in `--identifier-headers`. Identifier keys are stored
+lower-cased; values keep their original casing.
+
+```
+GET /api/search?value=T-123&key=trackingId&match=exact
+```
+
+| Query param | Meaning |
+|-------------|---------|
+| `value`     | **required** — identifier value to match |
+| `key`       | identifier key to match (omit to match any key) |
+| `match`     | `exact` (default) or `prefix` |
+| `group`     | restrict to sessions in this group |
+| `session`   | restrict to a single session (UUID or slug) |
+| `from`,`to` | capture-time bounds, unix milliseconds |
+| `limit`     | maximum number of results |
+
+Each result item contains `session_uuid`, `session_slug`, `request_uuid`, `key`, `value` and
+`captured_at_unix_milli`. With the **sqlite** driver the search is index-backed (and supports `prefix`/`group`);
+the in-memory hot index (retention `--hot-index-window`, default 7 days) serves recent exact-key lookups on the
+fast path. The memory/fs drivers fall back to a non-indexed scan.
+
+### FIFO events API (incremental polling)
+
+`GET /api/session/{ref}/events?after={cursor}&limit={n}` returns a session's captured requests in **FIFO order**
+(oldest first) with `seq` greater than `after`, up to `limit` (default 100, max 1000). The response is:
+
+```jsonc
+{
+  "events":      [ { "seq": 1, "uuid": "…", "method": "POST", "request_payload_base64": "…", "headers": […], "url": "…", "captured_at_unix_milli": … }, … ],
+  "next_cursor": 2,      // pass this as `after` on the next poll
+  "has_more":    true    // true when the page was full (more may remain)
+}
+```
+
+`seq` is a **durable, strictly-increasing, never-reused** sequence, so a consumer that always passes back
+`next_cursor` gets every event exactly once — no skips, no duplicates — even across request eviction. Typical
+consumer loop:
+
+```bash
+cursor=0
+while :; do
+  resp=$(curl -s -H "Authorization: Bearer $TOKEN" \
+    "$BASE/api/session/my-callback/events?after=$cursor&limit=100")
+  echo "$resp" | jq -c '.events[]'
+  cursor=$(echo "$resp" | jq -r '.next_cursor')
+  [ "$(echo "$resp" | jq -r '.has_more')" = "true" ] || sleep 2   # caught up → back off
+done
+```
+
+### Replay
+
+Re-deliver a previously captured request to any URL (using its original method, body and headers; hop-by-hop
+headers are stripped):
+
+```
+POST /api/session/{ref}/requests/{request_uuid}/replay
+{ "target_url": "https://downstream.example.com/hook" }
+```
+
+If `target_url` is omitted, the session's configured `forward_url` is used. The response reports the **downstream**
+result: `status_code`, `headers` and `body_base64`.
+
+> [!WARNING]
+> Replay is an operator-facing tool and performs **no SSRF protection** — the target URL is fully trusted. Do not
+> expose the dashboard/API to untrusted callers.
+
+### Dynamic response templates
+
+A session may carry a `response_script`: a [Go `text/template`](https://pkg.go.dev/text/template) evaluated against
+the incoming request to build the response **body** and (optionally) **status code**.
+
+> [!IMPORTANT]
+> A response script sets the response **body and status only — it does NOT set response headers**. Response headers
+> come from the session's static `headers` plus its `security_headers`. (If a script fails to parse/execute, the app
+> falls back to the session's static response. Execution is bounded by `--response-script-timeout`, default `1s`.)
+
+Template **data** (the `.` value):
+
+| Field | Description |
+|-------|-------------|
+| `.Method` | request method |
+| `.Path`   | request URL path |
+| `.Slug`   | session slug |
+| `.Body`   | raw request body (string) |
+| `.Query`  | `map[string]string` of query params (first value per key) |
+| `.Header` | `map[string]string` of headers (canonical name → first value) |
+| `.Now`    | capture time (`time.Time`) |
+| `.JSON`   | request body parsed as JSON (`map`/`slice`/scalar), or `nil` if not valid JSON |
+
+Helper **functions**: `json v`, `jsonPath v "a.b.0.c"`, `uuid`, `now [layout]`, `randInt min max`, `randHex n`,
+`base64 s`, `sha256 s`, `hmacSHA256 key msg`, `upper s`, `lower s`, `default def v`, `seq n`.
+
+**Status directive:** if the **first line** of the rendered output is exactly `@status NNN` (100–599), that line is
+consumed and used as the HTTP status; the rest is the body.
+
+Example — echo the incoming `trackingId` and return an HMAC-SHA256 signature **in the body**:
+
+```gotemplate
+{{ $id := jsonPath .JSON "trackingId" }}@status 200
+{"echo":"{{ $id }}","sig":"{{ hmacSHA256 "secret" $id }}"}
+```
+
+For `POST /w/my-callback/anything` with body `{"trackingId":"T-123"}` this responds `200` with
+`{"echo":"T-123","sig":"5304a3bf…"}`. (To put a signature in a *header* instead, add it as a static/security header
+on the session — scripts cannot set headers.)
+
+### Security headers
+
+A session's `security_headers` (name/value pairs) are added to **every** captured-request response, on both the
+script and the static-response paths — handy for asserting things like `X-Content-Type-Options: nosniff`.
+
+### 🔐 Authentication
+
+Set `--auth-token` (env `AUTH_TOKEN`) to protect the **dashboard and all `/api` endpoints** with a shared token.
+The webhook-capture path (`/w/...`) and the health probes (`/healthz`, `/ready`) stay **public**. An empty token
+(the default) disables auth entirely.
+
+Two ways to present the token:
+
+- **Header** (API/automation): `Authorization: Bearer <token>` on every `/api` request.
+- **Cookie** (browser/WebSocket): `POST /api/auth/login` with `{"token":"<token>"}` sets an HttpOnly `wh_token`
+  cookie; `GET|POST /api/auth/logout` clears it.
+
+```bash
+curl -H "Authorization: Bearer secret-token" http://localhost:8080/api/sessions
+```
 
 ## ⁉ FAQ
 
@@ -131,6 +309,18 @@ docker run --rm -t -p "8080:8080/tcp" ghcr.io/tarampampam/webhook-tester:2
 Next, open your browser at [`localhost:8080`](http://localhost:8080) to begin testing your webhooks. To stop the app, press `Ctrl+C` in
 the terminal where it's running.
 
+For a **persistent + token-protected** instance (sqlite database on a mounted volume, dashboard/API behind a shared
+token, webhook path still public):
+
+```shell
+docker run --rm -t -p "8080:8080/tcp" \
+  -e AUTH_TOKEN=secret-token \
+  -e STORAGE_DRIVER=sqlite \
+  -e SQLITE_PATH=/data/wh.db \
+  -v "$(pwd)/.wh-data:/data" \
+  ghcr.io/tarampampam/webhook-tester:2
+```
+
 For custom configuration options, refer to the CLI help below or execute the app with the `--help` flag.
 
 [link_ghcr]:https://github.com/users/tarampampam/packages/container/package/webhook-tester
@@ -167,26 +357,32 @@ $ app [GLOBAL FLAGS] start [COMMAND FLAGS] [ARGUMENTS...]
 
 The following flags are supported:
 
-| Name                          | Description                                                                                                                                                  | Type     |        Default value         |    Environment variables     |
-|-------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|:----------------------------:|:----------------------------:|
-| `--addr="…"`                  | IP (v4 or v6) address to listen on (0.0.0.0 to bind to all interfaces)                                                                                       | string   |         `"0.0.0.0"`          | `SERVER_ADDR`, `LISTEN_ADDR` |
-| `--port="…"`                  | HTTP server port                                                                                                                                             | uint     |            `8080`            |         `HTTP_PORT`          |
-| `--read-timeout="…"`          | maximum duration for reading the entire request, including the body (zero = no timeout)                                                                      | duration |            `1m0s`            |     `HTTP_READ_TIMEOUT`      |
-| `--write-timeout="…"`         | maximum duration before timing out writes of the response (zero = no timeout)                                                                                | duration |            `1m0s`            |     `HTTP_WRITE_TIMEOUT`     |
-| `--idle-timeout="…"`          | maximum amount of time to wait for the next request (keep-alive, zero = no timeout)                                                                          | duration |            `1m0s`            |     `HTTP_IDLE_TIMEOUT`      |
-| `--storage-driver="…"`        | storage driver (memory/redis/fs)                                                                                                                             | string   |          `"memory"`          |       `STORAGE_DRIVER`       |
-| `--session-ttl="…"`           | session TTL (time-to-live, lifetime)                                                                                                                         | duration |          `168h0m0s`          |        `SESSION_TTL`         |
-| `--max-requests="…"`          | maximal number of requests to store in the storage (zero means unlimited)                                                                                    | uint     |            `128`             |        `MAX_REQUESTS`        |
-| `--fs-storage-dir="…"`        | path to the directory for local fs storage (directory must exist)                                                                                            | string   |                              |       `FS_STORAGE_DIR`       |
-| `--max-request-body-size="…"` | maximal webhook request body size (in bytes), zero means unlimited                                                                                           | uint     |             `0`              |   `MAX_REQUEST_BODY_SIZE`    |
-| `--auto-create-sessions`      | automatically create sessions for incoming requests                                                                                                          | bool     |           `false`            |    `AUTO_CREATE_SESSIONS`    |
-| `--pubsub-driver="…"`         | pub/sub driver (memory/redis)                                                                                                                                | string   |          `"memory"`          |       `PUBSUB_DRIVER`        |
-| `--tunnel-driver="…"`         | tunnel driver to expose your locally running app to the internet (ngrok, empty to disable)                                                                   | string   |                              |       `TUNNEL_DRIVER`        |
-| `--ngrok-auth-token="…"`      | ngrok authentication token (required for ngrok tunnel; create a new one at https://dashboard.ngrok.com/authtokens/new)                                       | string   |                              |      `NGROK_AUTHTOKEN`       |
-| `--public-url-root="…"`       | public URL root override for webhook URLs (e.g., http://webhook-tester.k8s.internal); if not set, the URL shown in the UI is based on the browser's location | string   |                              |      `PUBLIC_URL_ROOT`       |
-| `--redis-dsn="…"`             | redis-like (redis, keydb) server DSN (e.g. redis://user:pwd@127.0.0.1:6379/0 or unix://user:pwd@/path/to/redis.sock?db=0)                                    | string   | `"redis://127.0.0.1:6379/0"` |         `REDIS_DSN`          |
-| `--shutdown-timeout="…"`      | maximum duration for graceful shutdown                                                                                                                       | duration |            `15s`             |      `SHUTDOWN_TIMEOUT`      |
-| `--use-live-frontend`         | use frontend from the local directory instead of the embedded one (useful for development)                                                                   | bool     |           `false`            |            *none*            |
+| Name                            | Description                                                                                                                                                  | Type     |         Default value         |    Environment variables     |
+|---------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|:-----------------------------:|:----------------------------:|
+| `--addr="…"`                    | IP (v4 or v6) address to listen on (0.0.0.0 to bind to all interfaces)                                                                                       | string   |          `"0.0.0.0"`          | `SERVER_ADDR`, `LISTEN_ADDR` |
+| `--port="…"`                    | HTTP server port                                                                                                                                             | uint     |            `8080`             |         `HTTP_PORT`          |
+| `--read-timeout="…"`            | maximum duration for reading the entire request, including the body (zero = no timeout)                                                                      | duration |            `1m0s`             |     `HTTP_READ_TIMEOUT`      |
+| `--write-timeout="…"`           | maximum duration before timing out writes of the response (zero = no timeout)                                                                                | duration |            `1m0s`             |     `HTTP_WRITE_TIMEOUT`     |
+| `--idle-timeout="…"`            | maximum amount of time to wait for the next request (keep-alive, zero = no timeout)                                                                          | duration |            `1m0s`             |     `HTTP_IDLE_TIMEOUT`      |
+| `--storage-driver="…"`          | storage driver (sqlite/memory/redis/fs)                                                                                                                      | string   |          `"sqlite"`           |       `STORAGE_DRIVER`       |
+| `--session-ttl="…"`             | session TTL (time-to-live, lifetime)                                                                                                                         | duration |          `168h0m0s`           |        `SESSION_TTL`         |
+| `--max-requests="…"`            | maximal number of requests to store in the storage (zero means unlimited)                                                                                    | uint     |             `128`             |        `MAX_REQUESTS`        |
+| `--fs-storage-dir="…"`          | path to the directory for local fs storage (directory must exist)                                                                                            | string   |                               |       `FS_STORAGE_DIR`       |
+| `--sqlite-path="…"`             | path to the SQLite database file (created if absent; used by the sqlite storage driver)                                                                      | string   |    `"./webhook-tester.db"`    |        `SQLITE_PATH`         |
+| `--auth-token="…"`              | shared token protecting the dashboard and /api endpoints (empty disables auth)                                                                               | string   |                               |         `AUTH_TOKEN`         |
+| `--identifier-keys="…"`         | JSON body field and query-param names to extract as searchable identifiers                                                                                   | string   | `"trackingId", "referenceId"` |      `IDENTIFIER_KEYS`       |
+| `--identifier-headers="…"`      | HTTP header names to extract as searchable identifiers                                                                                                       | string   |                               |     `IDENTIFIER_HEADERS`     |
+| `--response-script-timeout="…"` | maximum execution time for a session response (go-template) script                                                                                           | duration |             `1s`              |  `RESPONSE_SCRIPT_TIMEOUT`   |
+| `--hot-index-window="…"`        | retention window for the in-memory identifier hot index (search fast path)                                                                                   | duration |          `168h0m0s`           |      `HOT_INDEX_WINDOW`      |
+| `--max-request-body-size="…"`   | maximal webhook request body size (in bytes), zero means unlimited                                                                                           | uint     |              `0`              |   `MAX_REQUEST_BODY_SIZE`    |
+| `--auto-create-sessions`        | automatically create sessions for incoming requests                                                                                                          | bool     |            `false`            |    `AUTO_CREATE_SESSIONS`    |
+| `--pubsub-driver="…"`           | pub/sub driver (memory/redis)                                                                                                                                | string   |          `"memory"`           |       `PUBSUB_DRIVER`        |
+| `--tunnel-driver="…"`           | tunnel driver to expose your locally running app to the internet (ngrok, empty to disable)                                                                   | string   |                               |       `TUNNEL_DRIVER`        |
+| `--ngrok-auth-token="…"`        | ngrok authentication token (required for ngrok tunnel; create a new one at https://dashboard.ngrok.com/authtokens/new)                                       | string   |                               |      `NGROK_AUTHTOKEN`       |
+| `--public-url-root="…"`         | public URL root override for webhook URLs (e.g., http://webhook-tester.k8s.internal); if not set, the URL shown in the UI is based on the browser's location | string   |                               |      `PUBLIC_URL_ROOT`       |
+| `--redis-dsn="…"`               | redis-like (redis, keydb) server DSN (e.g. redis://user:pwd@127.0.0.1:6379/0 or unix://user:pwd@/path/to/redis.sock?db=0)                                    | string   |  `"redis://127.0.0.1:6379/0"` |         `REDIS_DSN`          |
+| `--shutdown-timeout="…"`        | maximum duration for graceful shutdown                                                                                                                       | duration |             `15s`             |      `SHUTDOWN_TIMEOUT`      |
+| `--use-live-frontend`           | use frontend from the local directory instead of the embedded one (useful for development)                                                                   | bool     |            `false`            |            *none*            |
 
 ### `start healthcheck` subcommand (aliases: `hc`, `health`, `check`)
 

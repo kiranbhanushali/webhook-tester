@@ -52,6 +52,17 @@ services:
       start_period: 10s
     security_opt: [no-new-privileges:true]
 
+  app-sqlite: # production-like: built runtime image, persistent SQLite, token-protected dashboard/API
+    build: {dockerfile: Dockerfile, target: runtime}
+    environment:
+      AUTH_TOKEN: secret-token # protects the dashboard + /api; the /w/ webhook path stays public
+      STORAGE_DRIVER: sqlite
+      SQLITE_PATH: /data/wh.db # persisted in the named volume below (image rootfs is read-only)
+      LOG_LEVEL: info
+    volumes: [app-sqlite-data:/data:rw]
+    ports: ['8082:8080/tcp'] # open http://127.0.0.1:8082
+    security_opt: [no-new-privileges:true] # the image already defines a HEALTHCHECK
+
   redis:
     image: docker.io/library/redis:8-alpine
     volumes: [redis-data:/data:rw]
@@ -75,4 +86,5 @@ services:
 volumes:
   app-modules-cache: {}
   app-tmp-data: {}
+  app-sqlite-data: {}
   redis-data: {}

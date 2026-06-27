@@ -11,6 +11,17 @@
 *_enum.go
 *.pb.go
 
+## Node dependencies & local build caches (root-level stray caches; web/ has its own ignores)
+node_modules/
+
+## Local SQLite database (default --sqlite-path) and its WAL sidecar files
+/webhook-tester.db
+/webhook-tester.db-shm
+/webhook-tester.db-wal
+
+## Local end-to-end / Docker data volume
+/.wh-data
+
 ## Temp dirs & trash
 *.env
 /__old__
