@@ -14,7 +14,9 @@ const QUERY_HELP_TEXT =
   '  items[0].id       → array index\n' +
   '  data["weird key"] → bracket-quoted key\n' +
   '  items[*].id       → wildcard (returns array)\n' +
-  '  data.*            → all object values'
+  '  data.*            → all object values\n' +
+  '\n' +
+  'Wildcards collect matching elements; missing ones are skipped.'
 
 export const ViewText: React.FC<{
   input: Uint8Array | null
@@ -28,7 +30,8 @@ export const ViewText: React.FC<{
   const [content, setContent] = useState<string | null>(null)
   const [language, setLanguage] = useState<'json' | 'xml' | null>(null)
   const [trimmed, setTrimmed] = useState<boolean>(false)
-  const [parsedJson, setParsedJson] = useState<unknown>(null)
+  // Wrapped in an object so a body that is exactly `null` (valid JSON) is still a valid parsed value.
+  const [parsedJson, setParsedJson] = useState<{ value: unknown } | null>(null)
   const [query, setQuery] = useState<string>('')
 
   useEffect(() => {
@@ -65,7 +68,7 @@ export const ViewText: React.FC<{
   const isJson = language === 'json' && parsedJson !== null
 
   // Evaluate the query on every keystroke — the payload is already in memory, so this is instant
-  const queryResult = isJson && query.trim() !== '' ? queryJson(parsedJson, query.trim()) : null
+  const queryResult = isJson && query.trim() !== '' ? queryJson(parsedJson.value, query.trim()) : null
 
   return (
     <>
@@ -118,7 +121,11 @@ export const ViewText: React.FC<{
 const tryToFormat = (
   str: string,
   contentType: string | null
-): [string /* content, probably well-formatted */, 'json' | 'xml' | null /* language */, unknown /* parsedJson or null */] => {
+): [
+  string /* content, probably well-formatted */,
+  'json' | 'xml' | null /* language */,
+  { value: unknown } | null /* parsed JSON wrapper, or null when not JSON */,
+] => {
   let looksLikeJson = false
   let looksLikeXml = false
 
@@ -142,7 +149,7 @@ const tryToFormat = (
     try {
       const parsed = JSON.parse(str)
 
-      return [JSON.stringify(parsed, undefined, 2), 'json', parsed]
+      return [JSON.stringify(parsed, undefined, 2), 'json', { value: parsed }]
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_) {
       // wrong json

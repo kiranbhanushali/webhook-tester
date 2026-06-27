@@ -14,7 +14,13 @@
  *   integer      ::= [0-9]+
  *
  * Wildcard segments collect matches from every array element (or object value)
- * and return an array — even if there is only one element.
+ * and return an array — even if there is only one element. Elements where the
+ * remaining sub-path does not resolve are SKIPPED; the wildcard only fails when
+ * ZERO elements matched (so items[*].id on a heterogeneous array returns just
+ * the ids that exist).
+ *
+ * Key lookups use own-property checks only — inherited members such as
+ * __proto__, constructor and toString never resolve.
  *
  * Missing paths  → { ok: false, error: "no match at <segment>" }.
  * Malformed paths → { ok: false, error: "<description>" }.
@@ -157,30 +163,28 @@ function traverse(value: unknown, segments: ReadonlyArray<Segment>): QueryResult
   const [head, ...tail] = segments as [Segment, ...Segment[]]
 
   if (head.type === 'wildcard') {
+    let items: unknown[]
     if (Array.isArray(value)) {
-      const results: unknown[] = []
-      for (let i = 0; i < value.length; i++) {
-        const r = traverse(value[i], tail)
-        if (!r.ok) {
-          return r
-        }
+      items = value
+    } else if (value !== null && typeof value === 'object') {
+      items = Object.values(value as Record<string, unknown>)
+    } else {
+      return { ok: false, error: 'wildcard applied to non-array/object value' }
+    }
+
+    // Collecting semantics: gather every element where the sub-path resolves and
+    // skip the ones that don't. Only fail when ZERO elements matched.
+    const results: unknown[] = []
+    for (const item of items) {
+      const r = traverse(item, tail)
+      if (r.ok) {
         results.push(r.value)
       }
-      return { ok: true, value: results }
     }
-    if (value !== null && typeof value === 'object') {
-      const entries = Object.values(value as Record<string, unknown>)
-      const results: unknown[] = []
-      for (const v of entries) {
-        const r = traverse(v, tail)
-        if (!r.ok) {
-          return r
-        }
-        results.push(r.value)
-      }
-      return { ok: true, value: results }
+    if (results.length === 0) {
+      return { ok: false, error: 'no match for wildcard' }
     }
-    return { ok: false, error: 'wildcard applied to non-array/object value' }
+    return { ok: true, value: results }
   }
 
   if (head.type === 'index') {
@@ -198,7 +202,9 @@ function traverse(value: unknown, segments: ReadonlyArray<Segment>): QueryResult
     return { ok: false, error: `no match at "${head.name}" — parent is not an object` }
   }
   const rec = value as Record<string, unknown>
-  if (!(head.name in rec)) {
+  // Own-property check only — never resolve inherited members like __proto__,
+  // constructor or toString (prototype-pollution / surprising-match safety).
+  if (!Object.prototype.hasOwnProperty.call(rec, head.name)) {
     return { ok: false, error: `no match at "${head.name}"` }
   }
   return traverse(rec[head.name], tail)

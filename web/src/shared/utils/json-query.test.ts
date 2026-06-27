@@ -81,6 +81,46 @@ describe('queryJson', () => {
     expect(result).toEqual({ ok: true, value: wantValue })
   })
 
+  // ── Collecting wildcard: skip elements where the sub-path doesn't resolve ─
+  test.each([
+    {
+      name: 'heterogeneous array — skip missing id',
+      path: 'items[*].id',
+      data: { items: [{ id: 1 }, { noId: 2 }, { id: 3 }] },
+      wantValue: [1, 3],
+    },
+    {
+      name: 'root array — skip missing key',
+      path: '[*].name',
+      data: [{ name: 'alice' }, { other: 'x' }, { name: 'carol' }],
+      wantValue: ['alice', 'carol'],
+    },
+  ])('collecting wildcard ($name)', ({ path, data, wantValue }) => {
+    const result = queryJson(data as unknown, path)
+    expect(result).toEqual({ ok: true, value: wantValue })
+  })
+
+  test('collecting wildcard with ZERO matches → ok:false', () => {
+    const result = queryJson({ items: [{ noId: 1 }, { noId: 2 }] }, 'items[*].id')
+    expect(result.ok).toBe(false)
+  })
+
+  // ── Prototype-chain safety ──────────────────────────────────────────────
+  test.each([
+    { name: '__proto__ on empty object', path: '__proto__', data: {} },
+    { name: 'constructor on plain object', path: 'constructor', data: { a: 1 } },
+    { name: 'toString inherited', path: 'toString', data: { a: 1 } },
+    { name: 'hasOwnProperty inherited', path: 'hasOwnProperty', data: { a: 1 } },
+  ])('does NOT resolve inherited member ($name) → ok:false', ({ path, data }) => {
+    const result = queryJson(data, path)
+    expect(result.ok).toBe(false)
+  })
+
+  test('an explicitly-set own key named "constructor" still resolves', () => {
+    const result = queryJson({ constructor: 'mine' }, 'constructor')
+    expect(result).toEqual({ ok: true, value: 'mine' })
+  })
+
   // ── Value types ─────────────────────────────────────────────────────────
   test.each([
     { name: 'null value', path: 'n', data: { n: null }, wantValue: null },

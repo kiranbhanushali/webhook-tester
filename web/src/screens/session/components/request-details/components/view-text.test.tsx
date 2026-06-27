@@ -29,6 +29,14 @@ describe('ViewText — JSON query box', () => {
     expect(screen.queryByPlaceholderText(/trackingId/i)).toBeNull()
   })
 
+  test('query input IS shown when the JSON body is exactly null, and $ returns null', () => {
+    renderViewText(enc('null'), 'application/json')
+    const input = screen.getByPlaceholderText(/trackingId/i)
+    expect(input).toBeInTheDocument()
+    fireEvent.change(input, { target: { value: '$' } })
+    expect(screen.getByText(/null/)).toBeInTheDocument()
+  })
+
   test('empty query shows full payload (no result label)', () => {
     renderViewText(enc('{"key":"val"}'), 'application/json')
     // query input is empty by default — "Query result" label should not be visible
