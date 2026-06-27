@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom'
 import type { SessionSummary } from '~/api'
 import { pathTo, RouteIDs } from '~/routing'
 import { buildWebhookUrl, useData } from '~/shared'
+import { IdentifierSearch } from './components/search-results'
 import styles from './screen.module.css'
 
 // Extend dayjs with relative time support (idempotent; main.tsx does this too at runtime)
@@ -116,6 +117,8 @@ export function SessionsListScreen(): React.JSX.Element {
 
   return (
     <div className={styles.container}>
+      <IdentifierSearch />
+
       <Group mb="md" align="center">
         <IconList size="1.4em" />
         <Title order={3} style={{ fontWeight: 400 }}>

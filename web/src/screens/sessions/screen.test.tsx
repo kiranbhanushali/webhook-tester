@@ -7,9 +7,10 @@ import { MemoryRouter } from 'react-router-dom'
 import type { SessionSummary } from '~/api'
 
 // Hoist mock functions so they are available in vi.mock factory
-const { mockListAllSessions, mockDestroySession } = vi.hoisted(() => ({
+const { mockListAllSessions, mockDestroySession, mockSearchIdentifiers } = vi.hoisted(() => ({
   mockListAllSessions: vi.fn<() => Promise<ReadonlyArray<SessionSummary>>>(),
   mockDestroySession: vi.fn<(sID: string) => Promise<() => Promise<void>>>(),
+  mockSearchIdentifiers: vi.fn<() => Promise<ReadonlyArray<never>>>().mockResolvedValue([]),
 }))
 
 vi.mock('~/shared', async (importOriginal) => {
@@ -19,6 +20,7 @@ vi.mock('~/shared', async (importOriginal) => {
     useData: () => ({
       listAllSessions: mockListAllSessions,
       destroySession: mockDestroySession,
+      searchIdentifiers: mockSearchIdentifiers,
     }),
   }
 })

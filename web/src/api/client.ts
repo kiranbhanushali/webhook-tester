@@ -84,6 +84,7 @@ export type SessionSummary = Readonly<{
 
 /** A single identifier-search result, linking a matched key/value to its captured request. */
 export type SearchResultItem = Readonly<{
+  sessionUUID: string
   sessionSlug: string
   requestUUID: string
   key: string
@@ -466,6 +467,7 @@ export class Client {
       return Object.freeze(
         Array.from(data).map((item) =>
           Object.freeze({
+            sessionUUID: item.session_uuid,
             sessionSlug: item.session_slug,
             requestUUID: item.request_uuid,
             key: item.key,
