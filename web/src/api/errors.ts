@@ -35,4 +35,35 @@ class APIErrorConflict extends BaseAPIError {
   public readonly description = 'Conflict (e.g. the requested slug is already taken)'
 }
 
-export { type APIError, APIErrorNotFound, APIErrorUnauthorized, APIErrorCommon, APIErrorUnknown, APIErrorConflict }
+/**
+ * Narrow an unknown caught error to its HTTP status code, if any.
+ *
+ * Reuses the unknown+narrow pattern: an {@link APIError} carries the originating `Response`,
+ * whose `status` is the HTTP status. Returns `null` for anything that is not a recognisable
+ * HTTP error (network failures, thrown strings, etc.).
+ */
+const httpStatusFromError = (err: unknown): number | null => {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'response' in err &&
+    typeof (err as { response: unknown }).response === 'object' &&
+    (err as { response: unknown }).response !== null
+  ) {
+    const status = (err as { response: { status?: unknown } }).response.status
+
+    return typeof status === 'number' ? status : null
+  }
+
+  return null
+}
+
+export {
+  type APIError,
+  APIErrorNotFound,
+  APIErrorUnauthorized,
+  APIErrorCommon,
+  APIErrorUnknown,
+  APIErrorConflict,
+  httpStatusFromError,
+}

@@ -24,6 +24,7 @@ import {
 } from '@tabler/icons-react'
 import { notifications as notify } from '@mantine/notifications'
 import { useData, type Session } from '~/shared'
+import { httpStatusFromError } from '~/api'
 import { ScriptHelpButton } from './script-help'
 import {
   HEADER_LIMITS,
@@ -43,6 +44,7 @@ export const SessionEditor: React.FC<{
   const { updateSession } = useData()
   const [loading, setLoading] = useState<boolean>(false)
   const [slugConflictError, setSlugConflictError] = useState<string | null>(null)
+  const [inboundAuthError, setInboundAuthError] = useState<string | null>(null)
 
   // Pre-fill all fields from the session
   const [slug, setSlug] = useState<string>(session.slug ?? '')
@@ -89,9 +91,15 @@ export const SessionEditor: React.FC<{
 
     setLoading(true)
     setSlugConflictError(null)
+    setInboundAuthError(null)
 
     const parsedHeaders = headersTextToHeaders(headers)
     const parsedSecHeaders = headersTextToHeaders(securityHeaders)
+
+    // Symmetric inbound-auth: a secret value is meaningless without a header name. When the header
+    // is blanked we clear the value too (send ""), never persisting a value-without-header config.
+    const authHeader = inboundAuthHeader.trim()
+    const authValue = authHeader ? inboundAuthValue.trim() : ''
 
     try {
       await updateSession(session.sID, {
@@ -107,8 +115,8 @@ export const SessionEditor: React.FC<{
         forwardUrl: forwardUrl.trim(),
         responseScript,
         longLived,
-        inboundAuthHeader: inboundAuthHeader.trim(),
-        inboundAuthValue: inboundAuthValue.trim(),
+        inboundAuthHeader: authHeader,
+        inboundAuthValue: authValue,
       })
 
       notify.show({
@@ -120,16 +128,13 @@ export const SessionEditor: React.FC<{
 
       onClose()
     } catch (err: unknown) {
-      // Surface 409 (slug already taken) as a field-level error
-      const isConflict =
-        typeof err === 'object' &&
-        err !== null &&
-        'response' in err &&
-        typeof (err as { response: unknown }).response === 'object' &&
-        (err as { response: { status: number } }).response?.status === 409
+      const status = httpStatusFromError(err)
 
-      if (isConflict) {
+      // Surface 409 (slug taken) and 400 (bad inbound-auth config) as field-level errors.
+      if (status === 409) {
         setSlugConflictError('This slug is already taken — choose a different one')
+      } else if (status === 400) {
+        setInboundAuthError('The server rejected the inbound-auth configuration')
       } else {
         notify.show({
           title: 'Failed to update session',
@@ -278,10 +283,15 @@ export const SessionEditor: React.FC<{
               description="Require callers to send this header; leave blank for a public endpoint."
               placeholder="X-Webhook-Token"
               leftSection={<IconLock size="1em" />}
-              error={wrongInboundAuth ? 'Header is set — secret value is required' : undefined}
+              error={
+                inboundAuthError ?? (wrongInboundAuth ? 'Header is set — secret value is required' : undefined)
+              }
               disabled={loading}
               value={inboundAuthHeader}
-              onChange={(e) => setInboundAuthHeader(e.currentTarget.value)}
+              onChange={(e) => {
+                setInboundAuthHeader(e.currentTarget.value)
+                setInboundAuthError(null)
+              }}
             />
             <PasswordInput
               my="sm"
@@ -290,7 +300,10 @@ export const SessionEditor: React.FC<{
               placeholder="super-secret"
               disabled={loading}
               value={inboundAuthValue}
-              onChange={(e) => setInboundAuthValue(e.currentTarget.value)}
+              onChange={(e) => {
+                setInboundAuthValue(e.currentTarget.value)
+                setInboundAuthError(null)
+              }}
             />
             <Textarea
               my="sm"

@@ -214,8 +214,9 @@ describe('NewSessionModal — new fields', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
       target: { value: 'X-Webhook-Token' },
     })
-    const pwInput = document.querySelector('input[type="password"]') as HTMLInputElement
-    fireEvent.change(pwInput, { target: { value: 'super-secret' } })
+    fireEvent.change(screen.getByLabelText(/auth secret/i), {
+      target: { value: 'super-secret' },
+    })
     expect(screen.getByRole('button', { name: /create/i })).not.toBeDisabled()
   })
 
@@ -225,8 +226,9 @@ describe('NewSessionModal — new fields', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
       target: { value: 'X-Webhook-Token' },
     })
-    const pwInput = document.querySelector('input[type="password"]') as HTMLInputElement
-    fireEvent.change(pwInput, { target: { value: 'my-secret' } })
+    fireEvent.change(screen.getByLabelText(/auth secret/i), {
+      target: { value: 'my-secret' },
+    })
     fireEvent.click(screen.getByRole('button', { name: /create/i }))
     await waitFor(() => {
       expect(mockNewSession).toHaveBeenCalledWith(
@@ -243,5 +245,49 @@ describe('NewSessionModal — new fields', () => {
     // Accordion 'identity' is open by default — slug and group visible without clicking
     expect(screen.getByRole('textbox', { name: /slug/i })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: /group/i })).toBeInTheDocument()
+  })
+
+  test('server 400 is surfaced as a field-level error on the inbound-auth header input', async () => {
+    mockNewSession.mockRejectedValue({ response: new Response(null, { status: 400 }) })
+    renderModal()
+
+    fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
+      target: { value: 'X-Webhook-Token' },
+    })
+    fireEvent.change(screen.getByLabelText(/auth secret/i), {
+      target: { value: 'super-secret' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /create/i }))
+
+    expect(await screen.findByText(/rejected the inbound-auth/i)).toBeInTheDocument()
+  })
+
+  test('server 409 is surfaced as a field-level error on the slug input', async () => {
+    mockNewSession.mockRejectedValue({ response: new Response(null, { status: 409 }) })
+    renderModal()
+
+    fireEvent.change(screen.getByRole('textbox', { name: /slug/i }), {
+      target: { value: 'taken-slug' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /create/i }))
+
+    expect(await screen.findByText(/already taken/i)).toBeInTheDocument()
+  })
+
+  test('header blank: inboundAuthValue is NOT sent even if a secret was typed', async () => {
+    renderModal()
+
+    // Type a secret value but leave the header name blank
+    fireEvent.change(screen.getByLabelText(/auth secret/i), {
+      target: { value: 'orphan-secret' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /create/i }))
+
+    await waitFor(() => {
+      expect(mockNewSession).toHaveBeenCalled()
+    })
+    const arg = mockNewSession.mock.calls[0][0]
+    expect(arg.inboundAuthHeader).toBeUndefined()
+    expect(arg.inboundAuthValue).toBeUndefined()
   })
 })

@@ -211,7 +211,7 @@ describe('SessionEditor', () => {
     // Security panel is collapsed — use hidden:true to access its fields
     const authHeaderInput = screen.getByRole('textbox', { name: /auth header/i, hidden: true }) as HTMLInputElement
     expect(authHeaderInput.value).toBe('X-Webhook-Token')
-    const authValueInput = document.querySelector('input[type="password"]') as HTMLInputElement
+    const authValueInput = screen.getByLabelText(/auth secret/i) as HTMLInputElement
     expect(authValueInput.value).toBe('existing-secret')
   })
 
@@ -230,7 +230,7 @@ describe('SessionEditor', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
       target: { value: 'X-My-Token' },
     })
-    fireEvent.change(document.querySelector('input[type="password"]') as HTMLInputElement, {
+    fireEvent.change(screen.getByLabelText(/auth secret/i), {
       target: { value: 'my-value' },
     })
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
@@ -240,5 +240,36 @@ describe('SessionEditor', () => {
         expect.objectContaining({ inboundAuthHeader: 'X-My-Token', inboundAuthValue: 'my-value' })
       )
     })
+  })
+
+  test('server 400 is surfaced as a field-level error on the inbound-auth header input', async () => {
+    const badAuthError = Object.assign(new Error('bad inbound-auth config'), {
+      response: { status: 400 },
+    })
+    mockUpdateSession.mockRejectedValue(badAuthError)
+
+    renderEditor(SESSION_WITH_AUTH)
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByText(/rejected the inbound-auth/i)).toBeInTheDocument()
+  })
+
+  test('clearing the auth header sends inboundAuthValue:"" too (no value-without-header)', async () => {
+    renderEditor(SESSION_WITH_AUTH)
+
+    // Clear the header name; the secret value is left as the pre-filled "existing-secret"
+    fireEvent.change(screen.getByRole('textbox', { name: /auth header/i, hidden: true }), {
+      target: { value: '' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSession).toHaveBeenCalled()
+    })
+    const patch = mockUpdateSession.mock.calls[0][1]
+    expect(patch.inboundAuthHeader).toBe('')
+    expect(patch.inboundAuthValue).toBe('')
   })
 })

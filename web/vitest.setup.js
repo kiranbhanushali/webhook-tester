@@ -1,5 +1,11 @@
 import '@testing-library/jest-dom/vitest'
 import { vi } from 'vitest'
+import dayjs from 'dayjs'
+import relativeTime from 'dayjs/plugin/relativeTime'
+
+// Mirror production (main.tsx): register the relativeTime plugin so components that call
+// dayjs(...).fromNow() work consistently across all test files (no cross-file leakage).
+dayjs.extend(relativeTime)
 
 const { getComputedStyle } = window
 

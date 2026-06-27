@@ -25,6 +25,7 @@ import {
 import { notifications as notify } from '@mantine/notifications'
 import { useNavigate } from 'react-router-dom'
 import { useStorage, UsedStorageKeys, type StorageArea, useSettings, useData } from '~/shared'
+import { httpStatusFromError } from '~/api'
 import { pathTo, RouteIDs } from '~/routing'
 import { ScriptHelpButton } from '~/screens/session/components/script-help'
 import {
@@ -90,6 +91,9 @@ export const NewSessionModal: React.FC<{
   const { maxRequestBodySize: maxBodySize } = useSettings()
   const { session, newSession, destroySession } = useData()
   const [loading, setLoading] = useState<boolean>(false)
+  // Server-side field errors surfaced on submit (parallel to the editor's slugConflictError).
+  const [slugConflictError, setSlugConflictError] = useState<string | null>(null)
+  const [inboundAuthError, setInboundAuthError] = useState<string | null>(null)
 
   // --- persisted fields (existing) ---
   const [status, setStatus] = useStorage<number>(controls.code.def, controls.code.key, controls.code.area)
@@ -168,8 +172,15 @@ export const NewSessionModal: React.FC<{
     // cook the security headers
     const parsedSecurityHeaders = securityHeaders.trim() ? headersTextToHeaders(securityHeaders) : []
 
+    // Symmetric inbound-auth: a secret value is meaningless without a header name, so when the
+    // header is blank we never send a value-without-header config.
+    const authHeader = inboundAuthHeader.trim()
+    const authValue = authHeader ? inboundAuthValue.trim() : ''
+
     // set the loading state
     setLoading(true)
+    setSlugConflictError(null)
+    setInboundAuthError(null)
 
     const id = notify.show({ title: 'Creating new WebHook', message: null, autoClose: false, loading: true })
 
@@ -185,8 +196,8 @@ export const NewSessionModal: React.FC<{
       securityHeaders: parsedSecurityHeaders.length > 0 ? parsedSecurityHeaders : undefined,
       forwardUrl: forwardUrl.trim() || undefined,
       longLived: longLived || undefined,
-      inboundAuthHeader: inboundAuthHeader.trim() || undefined,
-      inboundAuthValue: inboundAuthValue.trim() || undefined,
+      inboundAuthHeader: authHeader || undefined,
+      inboundAuthValue: authHeader && authValue ? authValue : undefined,
     })
       .then((opts) => {
         notify.update({
@@ -215,14 +226,25 @@ export const NewSessionModal: React.FC<{
 
         navigate(pathTo(RouteIDs.SessionAndRequest, opts.sID))
       })
-      .catch((err) => {
-        notify.update({
-          id,
-          title: 'Failed to create new WebHook',
-          message: String(err),
-          color: 'red',
-          loading: false,
-        })
+      .catch((err: unknown) => {
+        const status = httpStatusFromError(err)
+
+        // Surface 409 (slug taken) and 400 (bad inbound-auth config) as field-level errors.
+        if (status === 409) {
+          setSlugConflictError('This slug is already taken — choose a different one')
+          notify.hide(id)
+        } else if (status === 400) {
+          setInboundAuthError('The server rejected the inbound-auth configuration')
+          notify.hide(id)
+        } else {
+          notify.update({
+            id,
+            title: 'Failed to create new WebHook',
+            message: String(err),
+            color: 'red',
+            loading: false,
+          })
+        }
       })
       .finally(() => setLoading(false))
   }
@@ -255,13 +277,17 @@ export const NewSessionModal: React.FC<{
               placeholder="my-webhook"
               leftSection={<IconTag size="1em" />}
               error={
-                wrongSlug
+                slugConflictError ??
+                (wrongSlug
                   ? 'Slug must start with a lowercase letter or digit and contain only a-z, 0-9 and -'
-                  : undefined
+                  : undefined)
               }
               disabled={loading}
               value={slug}
-              onChange={(e) => setSlug(e.currentTarget.value)}
+              onChange={(e) => {
+                setSlug(e.currentTarget.value)
+                setSlugConflictError(null)
+              }}
             />
             <TextInput
               my="sm"
@@ -356,10 +382,15 @@ export const NewSessionModal: React.FC<{
               description="Require callers to send this header; leave blank for a public endpoint."
               placeholder="X-Webhook-Token"
               leftSection={<IconLock size="1em" />}
-              error={wrongInboundAuth ? 'Header is set — secret value is required' : undefined}
+              error={
+                inboundAuthError ?? (wrongInboundAuth ? 'Header is set — secret value is required' : undefined)
+              }
               disabled={loading}
               value={inboundAuthHeader}
-              onChange={(e) => setInboundAuthHeader(e.currentTarget.value)}
+              onChange={(e) => {
+                setInboundAuthHeader(e.currentTarget.value)
+                setInboundAuthError(null)
+              }}
             />
             <PasswordInput
               my="sm"
@@ -368,7 +399,10 @@ export const NewSessionModal: React.FC<{
               placeholder="super-secret"
               disabled={loading}
               value={inboundAuthValue}
-              onChange={(e) => setInboundAuthValue(e.currentTarget.value)}
+              onChange={(e) => {
+                setInboundAuthValue(e.currentTarget.value)
+                setInboundAuthError(null)
+              }}
             />
             <Textarea
               my="sm"
