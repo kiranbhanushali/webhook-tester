@@ -102,6 +102,14 @@ func NewSQLite(
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
+	// SQLite permits only a single writer at a time. With an unbounded database/sql
+	// connection pool, two pooled connections can each open a transaction and then
+	// race to upgrade to a write lock, producing a true deadlock that busy_timeout
+	// cannot resolve - SQLite aborts one side with SQLITE_BUSY. Pinning the pool to a
+	// single connection serializes all access and makes writes contention-safe (WAL
+	// still keeps reads fast). This is the canonical database/sql + SQLite setup.
+	db.SetMaxOpenConns(1)
+
 	if err = db.PingContext(ctx); err != nil {
 		_ = db.Close()
 
