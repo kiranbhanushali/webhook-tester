@@ -144,6 +144,7 @@ func (h *Handler) writer(ctx context.Context, ws *websocket.Conn, sub <-chan pub
 					Headers:             rHeaders,
 					Method:              strings.ToUpper(r.Request.Method),
 					Url:                 r.Request.URL,
+					Authorized:          r.Request.Authorized,
 				}
 			}
 

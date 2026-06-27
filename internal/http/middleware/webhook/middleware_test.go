@@ -711,6 +711,59 @@ func TestCapture_Firehose_UnauthorizedStillStreamed(t *testing.T) {
 	require.False(t, ev.Request.Authorized, "a rejected capture must be streamed with authorized=false")
 }
 
+// per-session live event (the stream the session screen subscribes to) ------
+
+// (ps-1) the PER-SESSION create event must ALSO carry the inbound-auth `authorized` flag, so the live
+// Unauthorized badge works on freshly-captured (WebSocket-pushed) requests without a re-fetch.
+func TestCapture_PerSession_EventCarriesAuthorized(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx = context.Background()
+		db  = newMemDB(t)
+	)
+
+	sID, err := db.NewSession(ctx, storage.Session{
+		Code:              200,
+		Slug:              "ps-guarded",
+		InboundAuthHeader: inboundAuthHeader,
+		InboundAuthValue:  inboundAuthValue,
+	})
+	require.NoError(t, err)
+
+	var h, ps = newTestHandlerWithPub(t, db, &config.AppSettings{SessionTTL: time.Minute}, nil, nil)
+
+	// subscribe to the PER-SESSION topic (keyed by the session uuid) BEFORE the capture
+	sub, unsub, err := ps.Subscribe(ctx, sID)
+	require.NoError(t, err)
+
+	t.Cleanup(unsub)
+
+	// POST WITHOUT the required inbound-auth header → rejected (401) but still captured
+	var wBad = httptest.NewRecorder()
+	h.ServeHTTP(wBad, httptest.NewRequest(http.MethodPost, "/w/ps-guarded", strings.NewReader(`{}`)))
+	require.Equal(t, http.StatusUnauthorized, wBad.Code)
+
+	var evBad = recvFirehose(t, sub) // the helper reads one event off any RequestEvent channel
+	require.Equal(t, pubsub.RequestActionCreate, evBad.Action)
+	require.NotNil(t, evBad.Request)
+	require.False(t, evBad.Request.Authorized, "the per-session event must flag a rejected capture authorized=false")
+
+	// POST WITH the correct header → 200, captured authorized=true
+	var (
+		wOk = httptest.NewRecorder()
+		rOk = httptest.NewRequest(http.MethodPost, "/w/ps-guarded", strings.NewReader(`{}`))
+	)
+
+	rOk.Header.Set(inboundAuthHeader, inboundAuthValue)
+	h.ServeHTTP(wOk, rOk)
+	require.Equal(t, http.StatusOK, wOk.Code)
+
+	var evOk = recvFirehose(t, sub)
+	require.NotNil(t, evOk.Request)
+	require.True(t, evOk.Request.Authorized, "the per-session event must flag an authorized capture authorized=true")
+}
+
 // a numeric slug must NOT be misread as a status-code override (guards the ref boundary).
 func TestCapture_NumericSlug_NotStatusOverride(t *testing.T) {
 	t.Parallel()

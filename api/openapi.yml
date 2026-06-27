@@ -576,7 +576,8 @@ components:
         headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
         url: {type: string, example: 'https://example.com/path?query=string'}
         captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
-      required: [uuid, client_address, method, headers, url, captured_at_unix_milli]
+        authorized: {type: boolean, example: true, description: 'False when the request was rejected by inbound auth (it is still captured)'}
+      required: [uuid, client_address, method, headers, url, captured_at_unix_milli, authorized]
       additionalProperties: false
 
     FirehoseEvent:

@@ -205,6 +205,9 @@ func New( //nolint:funlen,gocognit,gocyclo
 						Headers:            headers,
 						URL:                captured.URL,
 						CreatedAtUnixMilli: captured.CreatedAtUnixMilli,
+						// carry the inbound-auth flag on the per-session event too, so the live UI can flag
+						// a rejected (401) capture (the Unauthorized badge) without re-fetching the request.
+						Authorized: captured.Authorized,
 					},
 				}); err != nil {
 					log.Error("failed to publish a captured request", zap.Error(err))
