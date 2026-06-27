@@ -22,8 +22,8 @@ export function DashboardScreen(): React.JSX.Element {
   const [detail, setDetail] = useState<SelectedRequest | null>(null)
   const [newSessionOpened, newSessionHandlers] = useDisclosure(false)
 
-  // bumped on an interval so the rail's live dots + the rail itself refresh as the activity window slides
-  const [, setTick] = useState(0)
+  // bumped on an interval so the rail's live dots fade as the activity window slides (see activeUUIDs)
+  const [tick, setTick] = useState(0)
 
   const loadSessions = useCallback(async (): Promise<void> => {
     try {
@@ -79,8 +79,8 @@ export function DashboardScreen(): React.JSX.Element {
     }
 
     return set
-    // `setTick` drives the recompute as the window slides; events drives it as new ones arrive
-  }, [events])
+    // `tick` (a 2s timer) drives the recompute as the window slides; `events` drives it as new ones arrive
+  }, [events, tick])
 
   const filteredEvents = useMemo(
     () => (selected === ALL_SESSIONS ? events : events.filter((e) => e.sessionUUID === selected)),

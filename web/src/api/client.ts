@@ -820,6 +820,14 @@ export class Client {
           reject(err) // will be ignored if the promise is already resolved
         }
 
+        // a CLEAN close (server restart, proxy idle-timeout) fires onclose, NOT onerror — surface it as
+        // an error once connected so the caller can flip its "live" state instead of going silently stale.
+        ws.onclose = (event: CloseEvent): void => {
+          if (connected) {
+            onError?.(new Error(event.wasClean ? 'Live stream ended' : `Live stream connection lost (code ${event.code})`))
+          }
+        }
+
         ws.onmessage = (event): void => {
           if (event.data) {
             const req = JSON.parse(event.data) as components['schemas']['RequestEvent']
@@ -893,6 +901,14 @@ export class Client {
           }
 
           reject(err) // will be ignored if the promise is already resolved
+        }
+
+        // a CLEAN close (server restart, proxy idle-timeout) fires onclose, NOT onerror — surface it as
+        // an error once connected so the dashboard's "Live" indicator flips instead of going silently stale.
+        ws.onclose = (event: CloseEvent): void => {
+          if (connected) {
+            onError?.(new Error(event.wasClean ? 'Live stream ended' : `Live stream connection lost (code ${event.code})`))
+          }
         }
 
         ws.onmessage = (event): void => {

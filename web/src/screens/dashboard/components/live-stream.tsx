@@ -80,11 +80,11 @@ export const LiveStream: React.FC<{
   const [, setTick] = useState(0)
   const interval = useInterval(() => setTick((t) => t + 1), 5000)
 
-  useEffect((): (() => void) => {
+  useEffect(() => {
     interval.start()
 
-    return interval.stop // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    return interval.stop
+  }, [interval.start, interval.stop])
 
   return (
     <Stack gap="xs">

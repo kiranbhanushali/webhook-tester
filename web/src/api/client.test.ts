@@ -462,6 +462,7 @@ describe('subscribeFirehose', () => {
     public onopen: ((ev: Event) => void) | null = null
     public onmessage: ((ev: { data: string }) => void) | null = null
     public onerror: ((ev: Event) => void) | null = null
+    public onclose: ((ev: { wasClean: boolean; code: number }) => void) | null = null
     public readonly url: string
     public readonly close = vi.fn()
     public static instances: FakeWebSocket[] = []
@@ -542,6 +543,34 @@ describe('subscribeFirehose', () => {
     expect(ev.request?.authorized).toBe(false)
     expect(ev.request?.url.toString()).toBe('https://example.com/w/my-app/path?q=1')
     expect(ev.request?.capturedAt.getTime()).toBe(1234)
+  })
+
+  test('surfaces a clean close as onError once connected (so the UI stops showing "Live")', async () => {
+    const onEvent = vi.fn<(e: FirehoseEvent) => void>()
+    const onError = vi.fn<(err: Error) => void>()
+
+    const p = new Client({ baseUrl }).subscribeFirehose({ onEvent, onError })
+    const ws = lastWS()
+    ws.onopen?.(new Event('open'))
+    await p
+
+    ws.onclose?.({ wasClean: true, code: 1000 })
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][0]).toBeInstanceOf(Error)
+  })
+
+  test('does NOT surface a close that happens before the connection opened (handled via onerror/reject)', () => {
+    const onEvent = vi.fn<(e: FirehoseEvent) => void>()
+    const onError = vi.fn<(err: Error) => void>()
+
+    void new Client({ baseUrl }).subscribeFirehose({ onEvent, onError })
+    const ws = lastWS()
+
+    // close arrives before onopen → connected is still false
+    ws.onclose?.({ wasClean: false, code: 1006 })
+
+    expect(onError).not.toHaveBeenCalled()
   })
 })
 
