@@ -57,7 +57,18 @@ type (
 )
 
 func New(db storage.Storage) *Handler {
-	return &Handler{db: db, client: &http.Client{Timeout: replayTimeout}}
+	return &Handler{
+		db: db,
+		client: &http.Client{
+			Timeout: replayTimeout,
+			// Never follow redirects: return the 3xx response as-is so the caller
+			// sees the actual server reply (correct replay behavior) and a
+			// redirected URL cannot bounce the request to an internal host (SSRF).
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
 }
 
 func (h *Handler) Handle(

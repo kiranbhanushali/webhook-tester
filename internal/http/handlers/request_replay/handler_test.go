@@ -115,6 +115,50 @@ func TestHandler_FallsBackToForwardURL(t *testing.T) {
 	assert.EqualValues(t, http.StatusTeapot, resp.StatusCode)
 }
 
+func TestHandler_DoesNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+
+	// secondHit tracks whether the redirect target was ever contacted.
+	var secondHit bool
+
+	// redirectTarget is the URL the first server would redirect to.
+	// We create it first so we have its URL when building the redirector.
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		secondHit = true
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("should-not-see-this"))
+	}))
+	t.Cleanup(redirectTarget.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, redirectTarget.URL, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	var (
+		ctx = context.Background()
+		db  = storage.NewInMemory(time.Minute, 8)
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	sID, err := db.NewSession(ctx, storage.Session{Slug: "redirect-test"})
+	require.NoError(t, err)
+
+	rID, err := db.NewRequest(ctx, sID, storage.Request{Method: "GET"})
+	require.NoError(t, err)
+
+	h := request_replay.New(db)
+
+	resp, hErr := h.Handle(ctx, "redirect-test", uuid.MustParse(rID), &openapi.ReplayRequest{TargetUrl: redirector.URL})
+	require.NoError(t, hErr)
+	require.NotNil(t, resp)
+
+	// Must see the 302 from the redirector, not the 200 from the target.
+	assert.EqualValues(t, http.StatusFound, resp.StatusCode, "replay must return the redirect response, not follow it")
+	assert.False(t, secondHit, "replay must not contact the redirect target")
+}
+
 func TestHandler_NoTargetReturnsBadRequest(t *testing.T) {
 	t.Parallel()
 

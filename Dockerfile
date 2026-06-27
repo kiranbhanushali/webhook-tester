@@ -105,7 +105,9 @@ ENV \
   # logging level
   LOG_LEVEL=info \
   # default fs storage directory
-  FS_STORAGE_DIR=/data
+  FS_STORAGE_DIR=/data \
+  # default SQLite database path — /data is world-writable in the runtime image
+  SQLITE_PATH=/data/wh.db
 
 #EXPOSE "8080/tcp"
 
