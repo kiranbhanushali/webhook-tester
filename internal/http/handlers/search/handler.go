@@ -159,9 +159,11 @@ func (h *Handler) fromHotIndex(q storage.IdentifierQuery) *openapi.SearchRespons
 			continue
 		}
 
+		sUUID, _ := uuid.Parse(ref.SessionID)
 		rUUID, _ := uuid.Parse(ref.RequestID)
 
 		out = append(out, openapi.SearchResultItem{
+			SessionUuid:         sUUID,
 			SessionSlug:         ref.SessionSlug,
 			RequestUuid:         rUUID,
 			Key:                 q.Key, // exact match ⇒ the query key/value are the stored ones
@@ -192,9 +194,11 @@ func (h *Handler) fromStorage(ctx context.Context, q storage.IdentifierQuery) (*
 	out := make(openapi.SearchResponse, 0, len(matches))
 
 	for _, m := range matches {
+		sUUID, _ := uuid.Parse(m.SessionID)
 		rUUID, _ := uuid.Parse(m.RequestID)
 
 		out = append(out, openapi.SearchResultItem{
+			SessionUuid:         sUUID,
 			SessionSlug:         m.SessionSlug,
 			RequestUuid:         rUUID,
 			Key:                 m.Key,

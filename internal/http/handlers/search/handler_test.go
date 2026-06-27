@@ -55,6 +55,8 @@ func TestHandler_StoragePath_MapsMatches(t *testing.T) {
 	assert.Equal(t, "abc-123", item.Value)
 	assert.Positive(t, item.CapturedAtUnixMilli)
 	assert.NotEqual(t, uuid.Nil, item.RequestUuid)
+	// session_uuid must be populated on the storage path.
+	assert.Equal(t, sID, item.SessionUuid.String())
 }
 
 func TestHandler_HotPath_WarmedRecentExactMatches(t *testing.T) {
@@ -72,14 +74,15 @@ func TestHandler_HotPath_WarmedRecentExactMatches(t *testing.T) {
 		now        = time.Now().UnixMilli()
 		newRID     = uuid.NewString()
 		oldRID     = uuid.NewString()
+		sessID     = uuid.NewString() // real UUID so session_uuid round-trips cleanly
 		recentFrom = time.Now().Add(-time.Hour).UnixMilli()
 	)
 
 	hot.Add("trackingId", "v-1", hotindex.Ref{
-		SessionID: "s1", SessionSlug: "alpha", RequestID: oldRID, CapturedAtUnixMilli: now - 5000,
+		SessionID: sessID, SessionSlug: "alpha", RequestID: oldRID, CapturedAtUnixMilli: now - 5000,
 	})
 	hot.Add("trackingId", "v-1", hotindex.Ref{
-		SessionID: "s1", SessionSlug: "alpha", RequestID: newRID, CapturedAtUnixMilli: now - 1000,
+		SessionID: sessID, SessionSlug: "alpha", RequestID: newRID, CapturedAtUnixMilli: now - 1000,
 	})
 	hot.MarkWarm() // only a warmed index may be trusted
 
@@ -99,6 +102,9 @@ func TestHandler_HotPath_WarmedRecentExactMatches(t *testing.T) {
 	assert.Equal(t, oldRID, (*resp)[1].RequestUuid.String())
 	assert.Equal(t, "trackingId", (*resp)[0].Key)
 	assert.Equal(t, "v-1", (*resp)[0].Value)
+	// session_uuid must be populated on the hot-index path.
+	assert.Equal(t, sessID, (*resp)[0].SessionUuid.String())
+	assert.Equal(t, sessID, (*resp)[1].SessionUuid.String())
 
 	t.Run("limit honored", func(t *testing.T) {
 		t.Parallel()

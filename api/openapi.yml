@@ -358,12 +358,13 @@ components:
       description: A single search result linking a matched identifier to its captured request
       type: object
       properties:
+        session_uuid: {$ref: '#/components/schemas/UUID'}
         session_slug: {type: string, example: my-session}
         request_uuid: {$ref: '#/components/schemas/UUID'}
         key: {type: string, example: txn_id, description: The identifier key that matched the query}
         value: {type: string, example: abc-123, description: The identifier value that matched the query}
         captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
-      required: [session_slug, request_uuid, key, value, captured_at_unix_milli]
+      required: [session_uuid, session_slug, request_uuid, key, value, captured_at_unix_milli]
       additionalProperties: false
 
     UpdateSessionRequest:
