@@ -40,6 +40,11 @@ type FS struct {
 	// this function returns the current time, it's used to mock the time in tests
 	timeNow TimeFunc
 
+	// seq assigns each request a strictly-increasing, never-reused Request.Seq (persisted in
+	// the request file as "seq"). It is monotonic for the process lifetime but resets on
+	// restart, so a cursor is only durable within a single run — use SQLite otherwise.
+	seq atomic.Int64
+
 	close  chan struct{}
 	closed atomic.Bool
 
@@ -455,6 +460,11 @@ func (s *FS) NewRequest(ctx context.Context, sID string, r Request) (rID string,
 
 	rID, r.CreatedAtUnixMilli = s.newID(), now.UnixMilli()
 
+	// ID and Seq are output-only: assign them here (ignoring any caller-provided values).
+	// Seq is persisted in the encoded request (json:"seq"); ID is reconstructed from the
+	// file name on read, so it is not persisted.
+	r.ID, r.Seq = rID, s.seq.Add(1)
+
 	data, mErr := s.encDec.Encode(r)
 	if mErr != nil {
 		return "", mErr
@@ -586,6 +596,8 @@ func (s *FS) GetRequest(ctx context.Context, sID, rID string) (*Request, error) 
 		return nil, uErr
 	}
 
+	request.ID = rID // populate the output-only ID field (the request id is the lookup key)
+
 	return &request, nil
 }
 
@@ -650,6 +662,8 @@ func (s *FS) GetAllRequests(ctx context.Context, sID string) (map[string]Request
 				return err // decoding failed
 			}
 
+			request.ID = file.rID // populate the output-only ID field
+
 			mu.Lock()
 			m[file.rID] = request
 			mu.Unlock()
@@ -659,6 +673,47 @@ func (s *FS) GetAllRequests(ctx context.Context, sID string) (map[string]Request
 	}
 
 	return m, eg.Wait()
+}
+
+// ListRequestsAfter returns the session's requests with Seq > afterSeq, sorted by Seq
+// ascending (FIFO), capped at limit. It reuses GetAllRequests (which handles session
+// existence and expiry) and filters/sorts by the persisted seq. It backs the incremental
+// events-fetch API. Note: the fs seq counter is in-process and resets on restart, so a
+// cursor is only durable within a single process run — use the SQLite driver otherwise.
+func (s *FS) ListRequestsAfter(ctx context.Context, sID string, afterSeq int64, limit int) ([]Request, error) {
+	all, err := s.GetAllRequests(ctx, sID)
+	if err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var out = make([]Request, 0, len(all))
+
+	for _, req := range all {
+		if req.Seq > afterSeq {
+			out = append(out, req)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b Request) int {
+		switch {
+		case a.Seq < b.Seq:
+			return -1
+		case a.Seq > b.Seq:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
 }
 
 func (s *FS) DeleteRequest(ctx context.Context, sID, rID string) error {

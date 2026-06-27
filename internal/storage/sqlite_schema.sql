@@ -38,10 +38,25 @@ CREATE TABLE IF NOT EXISTS requests (
   headers_json  TEXT NOT NULL DEFAULT '[]',
   url           TEXT NOT NULL,
   client_addr   TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL
+  created_at_ms INTEGER NOT NULL,
+  seq           INTEGER NOT NULL DEFAULT 0       -- durable FIFO sequence (see counters / migrateRequestSeq)
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_session_time ON requests(session_id, created_at_ms DESC);
+
+-- NOTE: idx_requests_session_seq is created by the Go migration (migrateRequestSeq), not here,
+-- because on a pre-existing database the requests table may not yet have the seq column when
+-- this batch runs (CREATE TABLE IF NOT EXISTS is a no-op for an existing table).
+
+-- Durable, never-reused monotonic counters. The 'request_seq' row backs Request.Seq: it is
+-- bumped inside NewRequest's transaction and read back, so the sequence survives max-requests
+-- eviction (which deletes low-seq rows) and full request wipes (this table is independent).
+CREATE TABLE IF NOT EXISTS counters (
+  name  TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO counters (name, value) VALUES ('request_seq', 0);
 
 CREATE TABLE IF NOT EXISTS request_identifiers (
   request_id    TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,

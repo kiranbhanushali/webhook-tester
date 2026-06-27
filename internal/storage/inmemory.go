@@ -26,6 +26,11 @@ type (
 		// this function returns the current time, it's used to mock the time in tests
 		timeNow TimeFunc
 
+		// seq assigns each request a strictly-increasing, never-reused Request.Seq. It is
+		// monotonic for the process lifetime (the store is in-memory, so it resets when the
+		// process restarts, along with all data). See storage.Request.Seq.
+		seq atomic.Int64
+
 		close  chan struct{}
 		closed atomic.Bool
 	}
@@ -275,6 +280,9 @@ func (s *InMemory) NewRequest(ctx context.Context, sID string, r Request) (rID s
 
 	rID, r.CreatedAtUnixMilli = s.newID(), s.timeNow().UnixMilli()
 
+	// ID and Seq are output-only: assign them here (ignoring any caller-provided values).
+	r.ID, r.Seq = rID, s.seq.Add(1)
+
 	data.requests.Store(rID, r)
 
 	if s.maxRequests > 0 { // limit stored requests count
@@ -347,6 +355,45 @@ func (s *InMemory) GetAllRequests(ctx context.Context, sID string) (map[string]R
 	})
 
 	return all, nil
+}
+
+// ListRequestsAfter returns the session's requests with Seq > afterSeq, sorted by Seq
+// ascending (FIFO), capped at limit. It backs the incremental events-fetch API.
+func (s *InMemory) ListRequestsAfter(ctx context.Context, sID string, afterSeq int64, limit int) ([]Request, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if !s.isSessionExists(sID) {
+		return nil, ErrSessionNotFound // session not found
+	}
+
+	session, sessionOk := s.sessions.Load(sID)
+	if !sessionOk {
+		return nil, ErrSessionNotFound // like a fuse, because we already checked it
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	var out []Request
+
+	session.requests.Range(func(_ string, req Request) bool {
+		if req.Seq > afterSeq {
+			out = append(out, req)
+		}
+
+		return true
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
 }
 
 func (s *InMemory) DeleteRequest(ctx context.Context, sID, rID string) error {

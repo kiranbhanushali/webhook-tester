@@ -25,6 +25,7 @@ import (
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/session_check_exists"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/session_create"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/session_delete"
+	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/session_events"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/session_get"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/session_update"
 	"gh.tarampamp.am/webhook-tester/v2/internal/http/handlers/sessions_list"
@@ -40,9 +41,10 @@ import (
 )
 
 type ( // type aliases for better readability
-	sID  = openapi.SessionUUIDInPath
-	rID  = openapi.RequestUUIDInPath
-	skip = openapi.ApiSessionRequestsSubscribeParams // it doesn't matter
+	sID      = openapi.SessionUUIDInPath
+	rID      = openapi.RequestUUIDInPath
+	skip     = openapi.ApiSessionRequestsSubscribeParams // it doesn't matter
+	evParams = openapi.ApiSessionEventsParams
 )
 
 type OpenAPI struct {
@@ -63,6 +65,7 @@ type OpenAPI struct {
 		requestGet         func(context.Context, sID, rID) (*openapi.CapturedRequestsResponse, error)
 		requestDelete      func(context.Context, sID, rID) (*openapi.SuccessfulOperationResponse, error)
 		requestReplay      func(context.Context, sID, rID, *openapi.ReplayRequest) (*openapi.ReplayResponse, error)
+		sessionEvents      func(context.Context, sID, openapi.ApiSessionEventsParams) (*openapi.EventsResponse, error)
 		appVersion         func() openapi.VersionResponse
 		appVersionLatest   func(context.Context, http.ResponseWriter) (*openapi.VersionResponse, error)
 		readinessProbe     func(context.Context, http.ResponseWriter, string)
@@ -105,6 +108,7 @@ func NewOpenAPI(
 	si.handlers.requestGet = request_get.New(db).Handle
 	si.handlers.requestDelete = request_delete.New(appCtx, db, pubSub).Handle
 	si.handlers.requestReplay = request_replay.New(db).Handle
+	si.handlers.sessionEvents = session_events.New(db).Handle
 	si.handlers.appVersion = version.New(appVersion.Version()).Handle
 	si.handlers.appVersionLatest = version_latest.New(lastAppVer).Handle
 	si.handlers.readinessProbe = ready.New(rdyChecker).Handle
@@ -296,6 +300,14 @@ func (o *OpenAPI) ApiSessionGetRequest(w http.ResponseWriter, r *http.Request, s
 		}
 
 		o.errorToJson(w, err, statusCode)
+	} else {
+		o.respToJson(w, resp)
+	}
+}
+
+func (o *OpenAPI) ApiSessionEvents(w http.ResponseWriter, r *http.Request, sID sID, params evParams) {
+	if resp, err := o.handlers.sessionEvents(r.Context(), sID, params); err != nil {
+		o.errorToJson(w, err, statusForError(err))
 	} else {
 		o.respToJson(w, resp)
 	}

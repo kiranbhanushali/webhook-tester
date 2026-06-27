@@ -223,6 +223,40 @@ paths:
         '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
         '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
 
+  /api/session/{session_uuid}/events:
+    get:
+      summary: Fetch captured requests (events) incrementally in FIFO order using an offset cursor
+      description: >
+        Returns the session's captured requests in FIFO order (oldest first) with seq greater than
+        `after`, up to `limit`. Poll with `after=0`, then pass the returned `next_cursor` as `after`
+        on each subsequent poll to receive only newer events (no skips, no duplicates). The session
+        reference may be a UUID or a slug.
+      tags: [api]
+      operationId: apiSessionEvents
+      parameters:
+        - {$ref: '#/components/parameters/SessionUUIDInPath'}
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            x-go-type: int64
+            minimum: 0
+            description: 'Return events with seq greater than this cursor (default: 0)'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            x-go-type: int
+            minimum: 1
+            maximum: 1000
+            description: 'Maximum number of events to return (default: 100, max: 1000)'
+      responses:
+        '200': {$ref: '#/components/responses/EventsResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'} # Not found
+        '5XX': {$ref: '#/components/responses/ErrorResponse'} # Server error
+
   /api/version:
     get:
       summary: Get app version
@@ -446,6 +480,45 @@ components:
       required: [uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli]
       additionalProperties: false
 
+    EventItem:
+      type: object
+      description: A captured request (event) with its durable FIFO sequence number
+      properties:
+        seq:
+          type: integer
+          x-go-type: int64
+          example: 42
+          description: Durable, strictly-increasing, never-reused capture sequence (use as the cursor)
+        uuid: {$ref: '#/components/schemas/UUID'}
+        client_address: {type: string, format: IPv4, example: '214.184.32.7'}
+        method: {$ref: '#/components/schemas/HttpMethod'}
+        request_payload_base64: {$ref: '#/components/schemas/Base64Encoded'}
+        headers: {type: array, items: {$ref: '#/components/schemas/HttpHeader'}}
+        url:
+          description: The URL's hostname, schema, and port may differ from those on the frontend due to proxying
+          type: string
+          example: 'https://example.com/path?query=string'
+        captured_at_unix_milli: {$ref: '#/components/schemas/UnixMilliTime'}
+      required: [seq, uuid, client_address, method, request_payload_base64, headers, url, captured_at_unix_milli]
+      additionalProperties: false
+
+    EventsResponse:
+      type: object
+      description: A page of captured requests (events) in FIFO order with a cursor for the next poll
+      properties:
+        events: {type: array, items: {$ref: '#/components/schemas/EventItem'}}
+        next_cursor:
+          type: integer
+          x-go-type: int64
+          example: 42
+          description: Pass as `after` on the next poll; echoes the request's `after` when no events are returned
+        has_more:
+          type: boolean
+          example: true
+          description: True when the page was full (limit reached), so more events may remain
+      required: [events, next_cursor, has_more]
+      additionalProperties: false
+
     RequestEvent:
       type: object
       properties:
@@ -634,6 +707,12 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/CapturedRequest'}
+
+    EventsResponse:
+      description: A page of captured events in FIFO order with a cursor for the next poll
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/EventsResponse'}
 
     SuccessfulOperationResponse:
       description: Operation completed successfully

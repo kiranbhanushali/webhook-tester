@@ -236,6 +236,10 @@ func (s *Redis) NewRequest(ctx context.Context, sID string, r Request) (rID stri
 
 	rID, r.CreatedAtUnixMilli = s.newID(), now.UnixMilli()
 
+	// The Redis driver has no durable monotonic sequence (see ListRequestsAfter), so Seq is
+	// best-effort 0; ID is output-only and reconstructed from the request key on read.
+	r.ID, r.Seq = "", 0
+
 	data, mErr := s.encDec.Encode(r)
 	if mErr != nil {
 		return "", mErr
@@ -548,5 +552,13 @@ func (s *Redis) ListSessions(_ context.Context, _ SessionFilter) ([]SessionSumma
 // SearchRequests is not supported by the Redis driver. Use the SQLite driver for indexed search.
 // Returns ErrSearchUnsupported.
 func (s *Redis) SearchRequests(_ context.Context, _ IdentifierQuery) ([]RequestMatch, error) {
+	return nil, ErrSearchUnsupported
+}
+
+// ListRequestsAfter is not supported by the Redis driver: it has no durable, never-reused
+// monotonic sequence to anchor the FIFO cursor (requests are scored by capture time, which
+// is not collision-free and resets nothing on eviction). Use the SQLite driver — the
+// documented default — for the incremental events-fetch API. Returns ErrSearchUnsupported.
+func (s *Redis) ListRequestsAfter(_ context.Context, _ string, _ int64, _ int) ([]Request, error) {
 	return nil, ErrSearchUnsupported
 }

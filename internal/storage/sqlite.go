@@ -114,6 +114,14 @@ func NewSQLite(
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
+	// Idempotent migration so a pre-existing database (created before the seq column /
+	// counters table) gets the durable FIFO sequence wired up safely.
+	if err = migrateRequestSeq(ctx, db); err != nil {
+		_ = db.Close()
+
+		return nil, fmt.Errorf("migrate request seq: %w", err)
+	}
+
 	var s = SQLite{
 		db:              db,
 		sessionTTL:      sessionTTL,
@@ -220,7 +228,7 @@ func (s *SQLite) Close() error {
 const sessionCols = `id, slug, group_name, code, headers_json, response_body, delay_millis, ` +
 	`response_script, security_headers, forward_url, long_lived, created_at_ms, expires_at_ms`
 
-const requestCols = `id, method, body, headers_json, url, client_addr, created_at_ms`
+const requestCols = `id, method, body, headers_json, url, client_addr, created_at_ms, seq`
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
 type rowScanner interface{ Scan(dest ...any) error }
@@ -408,11 +416,19 @@ func (s *SQLite) NewRequest(ctx context.Context, sID string, r Request) (string,
 	}
 	defer func() { _ = tx.Rollback() }() // no-op once committed
 
+	// Durable, never-reused sequence: bump the counter inside this transaction and read it
+	// back. SQLite serializes writers, so concurrent NewRequest calls cannot share a seq.
+	// A plain UPDATE + SELECT (rather than RETURNING) keeps this portable on modernc SQLite.
+	seq, seqErr := nextSQLiteRequestSeq(ctx, tx)
+	if seqErr != nil {
+		return "", seqErr
+	}
+
 	const insReq = `INSERT INTO requests (id, session_id, method, body, headers_json, url, client_addr, ` +
-		`created_at_ms) VALUES (?,?,?,?,?,?,?,?)`
+		`created_at_ms, seq) VALUES (?,?,?,?,?,?,?,?,?)`
 
 	if _, err = tx.ExecContext(ctx, insReq,
-		rID, sID, r.Method, r.Body, headers, r.URL, r.ClientAddr, r.CreatedAtUnixMilli); err != nil {
+		rID, sID, r.Method, r.Body, headers, r.URL, r.ClientAddr, r.CreatedAtUnixMilli, seq); err != nil {
 		return "", fmt.Errorf("insert request: %w", err)
 	}
 
@@ -522,6 +538,47 @@ func (s *SQLite) GetAllRequests(ctx context.Context, sID string) (map[string]Req
 	}
 
 	return all, nil
+}
+
+// ListRequestsAfter returns the session's requests with seq > afterSeq, ordered by seq
+// ascending (FIFO), capped at limit. It backs the incremental events-fetch API.
+func (s *SQLite) ListRequestsAfter(ctx context.Context, sID string, afterSeq int64, limit int) ([]Request, error) {
+	if err := s.isOpenAndNotDone(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := s.ensureSessionExists(ctx, sID); err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	const q = `SELECT ` + requestCols + ` FROM requests WHERE session_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, sID, afterSeq, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list requests after: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Request
+
+	for rows.Next() {
+		_, req, sErr := scanRequest(rows)
+		if sErr != nil {
+			return nil, sErr
+		}
+
+		out = append(out, *req)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate requests: %w", err)
+	}
+
+	return out, nil
 }
 
 func (s *SQLite) DeleteRequest(ctx context.Context, sID, rID string) error {
@@ -871,15 +928,16 @@ func scanSession(sc rowScanner) (*Session, error) {
 	return &sess, nil
 }
 
-// scanRequest reads a full requests row, returning its id and the Request.
+// scanRequest reads a full requests row, returning its id and the Request (with the
+// output-only ID and Seq fields populated). The column order matches requestCols.
 func scanRequest(sc rowScanner) (string, *Request, error) {
 	var (
 		id, method, headersJSON, reqURL, clientAddr string
 		body                                        []byte
-		createdMs                                   int64
+		createdMs, seq                              int64
 	)
 
-	if err := sc.Scan(&id, &method, &body, &headersJSON, &reqURL, &clientAddr, &createdMs); err != nil {
+	if err := sc.Scan(&id, &method, &body, &headersJSON, &reqURL, &clientAddr, &createdMs, &seq); err != nil {
 		return "", nil, err
 	}
 
@@ -889,12 +947,14 @@ func scanRequest(sc rowScanner) (string, *Request, error) {
 	}
 
 	return id, &Request{
+		ID:                 id,
 		ClientAddr:         clientAddr,
 		Method:             method,
 		Body:               body,
 		Headers:            headers,
 		URL:                reqURL,
 		CreatedAtUnixMilli: createdMs,
+		Seq:                seq,
 	}, nil
 }
 
@@ -924,6 +984,98 @@ func unmarshalHeaders(s string) ([]HttpHeader, error) {
 	}
 
 	return h, nil
+}
+
+// nextSQLiteRequestSeq atomically advances the durable request_seq counter within tx and
+// returns the new value. The UPDATE takes SQLite's write lock; the SELECT then reads the
+// value the same transaction just wrote (RETURNING is avoided for modernc portability).
+func nextSQLiteRequestSeq(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if _, err := tx.ExecContext(ctx, `UPDATE counters SET value = value + 1 WHERE name = 'request_seq'`); err != nil {
+		return 0, fmt.Errorf("bump request seq: %w", err)
+	}
+
+	var seq int64
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM counters WHERE name = 'request_seq'`).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("read request seq: %w", err)
+	}
+
+	return seq, nil
+}
+
+// migrateRequestSeq idempotently upgrades a database to the durable FIFO sequence: it adds
+// the requests.seq column (backfilling existing rows in capture order so older requests get
+// lower seqs), creates the (session_id, seq) index, and seeds the request_seq counter above
+// any already-assigned seq so values are never reused. It is safe to run on a fresh database
+// (the column already exists, the backfill is skipped) and on every startup.
+func migrateRequestSeq(ctx context.Context, db *sql.DB) error {
+	hasSeq, err := requestsHasSeqColumn(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	if !hasSeq {
+		if _, err = db.ExecContext(ctx, `ALTER TABLE requests ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add seq column: %w", err)
+		}
+
+		// Backfill existing rows: rank by capture time (id as a stable tie-breaker) so the
+		// oldest request gets seq 1, preserving FIFO order for an already-populated database.
+		const backfill = `UPDATE requests SET seq = (
+			SELECT COUNT(*) FROM requests AS r2
+			WHERE r2.created_at_ms < requests.created_at_ms
+			   OR (r2.created_at_ms = requests.created_at_ms AND r2.id <= requests.id))`
+
+		if _, err = db.ExecContext(ctx, backfill); err != nil {
+			return fmt.Errorf("backfill seq: %w", err)
+		}
+	}
+
+	if _, err = db.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_requests_session_seq ON requests(session_id, seq)`); err != nil {
+		return fmt.Errorf("create seq index: %w", err)
+	}
+
+	// Ensure the durable counter never sits below an already-assigned seq (e.g. after a
+	// backfill, or if the counter row was just seeded to 0 on an existing database).
+	const seed = `UPDATE counters SET value = (SELECT COALESCE(MAX(seq), 0) FROM requests) ` +
+		`WHERE name = 'request_seq' AND value < (SELECT COALESCE(MAX(seq), 0) FROM requests)`
+
+	if _, err = db.ExecContext(ctx, seed); err != nil {
+		return fmt.Errorf("seed request seq counter: %w", err)
+	}
+
+	return nil
+}
+
+// requestsHasSeqColumn reports whether the requests table already has a seq column.
+func requestsHasSeqColumn(ctx context.Context, db *sql.DB) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(requests)`)
+	if err != nil {
+		return false, fmt.Errorf("inspect requests columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, ctype      string
+			dflt             sql.NullString
+		)
+
+		if err = rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("scan column info: %w", err)
+		}
+
+		if name == "seq" {
+			return true, nil
+		}
+	}
+
+	if err = rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate column info: %w", err)
+	}
+
+	return false, nil
 }
 
 // isUniqueViolation reports whether err is a SQLite UNIQUE/PRIMARY KEY constraint failure.
