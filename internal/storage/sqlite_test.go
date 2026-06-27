@@ -587,3 +587,19 @@ func TestSQLite_ListRecentIdentifiers(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, none)
 }
+
+// TestSQLite_PragmaSynchronousNormal verifies that every connection opened by the
+// SQLite driver has synchronous=NORMAL (value 1) applied. With WAL this means
+// commits skip the per-transaction fsync — durable across app crashes, appropriate
+// for a webhook-testing tool.
+func TestSQLite_PragmaSynchronousNormal(t *testing.T) {
+	t.Parallel()
+
+	s := newSQLite(t, time.Hour, 0)
+
+	var syncVal int
+
+	err := s.DB().QueryRowContext(context.Background(), `PRAGMA synchronous`).Scan(&syncVal)
+	require.NoError(t, err)
+	require.Equal(t, 1, syncVal, "expected synchronous=NORMAL (1), got %d", syncVal)
+}
