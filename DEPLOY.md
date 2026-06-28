@@ -72,15 +72,16 @@ Data persists in the `/var/lib/webhook-tester` host volume.
 
 ## Option B — Raw binary + systemd
 
-EC2 is linux/amd64. A prebuilt static binary (no cgo, no libc dependency) is produced by
-`scripts/build-linux.sh` (output `dist/webhook-tester-linux-amd64`).
+Match your EC2 arch: **Graviton = arm64** (e.g. the `ec2-host` box), classic Intel/AMD = amd64.
+`scripts/build-linux.sh` produces static binaries (no cgo, no libc dependency) for both:
+`dist/webhook-tester-linux-arm64` and `dist/webhook-tester-linux-amd64`.
 
 ```bash
 # 1) build it (on your Mac/build host, from the repo):
 ./scripts/build-linux.sh
 
-# 2) copy to the EC2 box:
-scp dist/webhook-tester-linux-amd64 ec2-user@HOST:/tmp/webhook-tester
+# 2) copy the matching arch to the EC2 box (arm64 for Graviton):
+scp dist/webhook-tester-linux-arm64 ec2-host:/tmp/webhook-tester
 
 # 3) on the EC2 box:
 sudo install -m 0755 /tmp/webhook-tester /usr/local/bin/webhook-tester
