@@ -217,4 +217,67 @@ describe('DashboardScreen', () => {
     // the reused RequestDetails renders inside the detail drawer
     expect(await screen.findByTestId('request-details')).toBeInTheDocument()
   })
+
+  test('ArrowDown selects the first (newest) event then moves to the next; ArrowUp goes back', async () => {
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('session-alpha')).toBeInTheDocument())
+
+    // Push two events; they land in the same batcher flush.
+    // mergeNewestDeduped walks the batch newest-first, so events = [req-2, req-1] (index 0 = newest).
+    pushEvent(makeEvent({ sessionUUID: 'uuid-alpha', sessionSlug: 'session-alpha', rID: 'req-1', method: 'POST' }))
+    pushEvent(makeEvent({ sessionUUID: 'uuid-beta', sessionSlug: 'session-beta', rID: 'req-2', method: 'GET' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('POST')).toBeInTheDocument()
+      expect(screen.getByText('GET')).toBeInTheDocument()
+    })
+
+    vi.clearAllMocks()
+
+    // ArrowDown with nothing selected → picks index 0 = req-2 (newest)
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    await waitFor(() => {
+      expect(mockSwitchToSession).toHaveBeenCalledWith('uuid-beta')
+      expect(mockSwitchToRequest).toHaveBeenCalledWith('uuid-beta', 'req-2')
+    })
+
+    vi.clearAllMocks()
+
+    // ArrowDown again → moves to index 1 = req-1 (older)
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    await waitFor(() => {
+      expect(mockSwitchToSession).toHaveBeenCalledWith('uuid-alpha')
+      expect(mockSwitchToRequest).toHaveBeenCalledWith('uuid-alpha', 'req-1')
+    })
+
+    vi.clearAllMocks()
+
+    // ArrowUp → goes back to index 0 = req-2
+    fireEvent.keyDown(window, { key: 'ArrowUp' })
+    await waitFor(() => {
+      expect(mockSwitchToSession).toHaveBeenCalledWith('uuid-beta')
+      expect(mockSwitchToRequest).toHaveBeenCalledWith('uuid-beta', 'req-2')
+    })
+  })
+
+  test('Arrow keys are ignored when the event target is an input element', async () => {
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('session-alpha')).toBeInTheDocument())
+
+    pushEvent(makeEvent({ sessionUUID: 'uuid-alpha', sessionSlug: 'session-alpha', rID: 'req-1', method: 'DELETE' }))
+    await waitFor(() => expect(screen.getByText('DELETE')).toBeInTheDocument())
+
+    vi.clearAllMocks()
+
+    // Simulate a keydown originating from an input (e.g. the jq filter box).
+    // The event bubbles to window; our handler should ignore it because e.target is an input.
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    try {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+      expect(mockSwitchToRequest).not.toHaveBeenCalled()
+    } finally {
+      document.body.removeChild(input)
+    }
+  })
 })

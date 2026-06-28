@@ -20,6 +20,14 @@
   background-color: var(--mantine-color-default-hover);
 }
 
+.rowSelected {
+  background-color: var(--mantine-color-blue-light);
+}
+
+.rowSelected:hover {
+  background-color: var(--mantine-color-blue-light-hover);
+}
+
 .peek {
   font-family: var(--mantine-font-family-monospace);
   font-size: var(--mantine-font-size-xs);

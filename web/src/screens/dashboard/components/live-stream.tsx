@@ -11,8 +11,17 @@ import styles from './live-stream.module.css'
 const StreamRow: React.FC<{
   event: FirehoseEvent
   sessionByUUID: ReadonlyMap<string, SessionSummary>
+  selected: boolean
   onClick: () => void
-}> = ({ event, sessionByUUID, onClick }) => {
+}> = ({ event, sessionByUUID, selected, onClick }) => {
+  const rowRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (selected && rowRef.current) {
+      rowRef.current.scrollIntoView({ block: 'nearest' })
+    }
+  }, [selected])
+
   const req = event.request
 
   if (!req) {
@@ -24,7 +33,8 @@ const StreamRow: React.FC<{
 
   return (
     <UnstyledButton
-      className={styles.row}
+      ref={rowRef}
+      className={selected ? `${styles.row} ${styles.rowSelected}` : styles.row}
       onClick={onClick}
       aria-label={`Open ${req.method} request to ${event.sessionSlug}`}
     >
@@ -83,7 +93,9 @@ export const LiveStream: React.FC<{
   /** Load the next (older) page; returns a promise so the sentinel can release its guard on completion. */
   onLoadOlder: () => Promise<void>
   onRowClick: (sID: string, rID: string) => void
-}> = ({ events, sessionByUUID, live, error, filtered, loading, hasMore, loadingOlder, onLoadOlder, onRowClick }) => {
+  /** UUID of the currently-selected request (for highlight); null = nothing selected. */
+  selectedUUID: string | null
+}> = ({ events, sessionByUUID, live, error, filtered, loading, hasMore, loadingOlder, onLoadOlder, onRowClick, selectedUUID }) => {
   // re-render periodically so the relative "fromNow" times stay fresh without per-row timers
   const [, setTick] = useState(0)
   const interval = useInterval(() => setTick((t) => t + 1), 5000)
@@ -189,6 +201,7 @@ export const LiveStream: React.FC<{
                   key={`${event.sessionUUID}:${event.request.uuid}`}
                   event={event}
                   sessionByUUID={sessionByUUID}
+                  selected={event.request.uuid === selectedUUID}
                   onClick={() => event.request && onRowClick(event.sessionUUID, event.request.uuid)}
                 />
               ) : null

@@ -142,6 +142,70 @@ export function DashboardScreen(): React.JSX.Element {
 
   const handleRowClick = useCallback((sID: string, rID: string) => setDetail({ sID, rID }), [])
 
+  // Refs so the keydown handler always reads the latest events/detail without being re-registered
+  // every render (the same pattern used by useEventStream for its live predicate).
+  const eventsRef = useRef<ReadonlyArray<FirehoseEvent>>(events)
+  eventsRef.current = events
+  const detailRef = useRef<SelectedRequest | null>(detail)
+  detailRef.current = detail
+
+  // Keyboard navigation: ArrowDown/Up moves the selection through the live stream.
+  // A window listener is used so the dashboard doesn't need to be "focused" as a DOM element;
+  // keys originating from an input/textarea/select/contenteditable are ignored.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') {
+        return
+      }
+
+      const target = e.target
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return
+      }
+
+      const eventsWithRequests = eventsRef.current.filter((ev) => ev.request !== undefined)
+      if (eventsWithRequests.length === 0) {
+        return
+      }
+
+      const currentDetail = detailRef.current
+      const currentIndex = currentDetail
+        ? eventsWithRequests.findIndex((ev) => ev.request?.uuid === currentDetail.rID)
+        : -1
+
+      let nextIndex: number
+      if (e.key === 'ArrowDown') {
+        // Nothing selected yet → pick the first (newest); otherwise clamp at the last.
+        nextIndex = currentIndex === -1 ? 0 : Math.min(currentIndex + 1, eventsWithRequests.length - 1)
+      } else {
+        // ArrowUp: nothing selected or already at the top → no-op (no preventDefault).
+        if (currentIndex <= 0) {
+          return
+        }
+        nextIndex = currentIndex - 1
+      }
+
+      // No actual movement (clamped at boundary) → let the browser scroll the page normally.
+      if (nextIndex === currentIndex) {
+        return
+      }
+
+      e.preventDefault()
+      const nextEvent = eventsWithRequests[nextIndex]
+      if (nextEvent?.request) {
+        handleRowClick(nextEvent.sessionUUID, nextEvent.request.uuid)
+      }
+    }
+
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [handleRowClick])
+
   const handleNewSessionClose = useCallback(() => {
     newSessionHandlers.close()
     void loadSessions() // a freshly created endpoint should appear in the rail
@@ -184,6 +248,7 @@ export function DashboardScreen(): React.JSX.Element {
             loadingOlder={loadingOlder}
             onLoadOlder={loadOlder}
             onRowClick={handleRowClick}
+            selectedUUID={detail?.rID ?? null}
           />
         </Paper>
 
