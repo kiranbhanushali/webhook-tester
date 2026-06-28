@@ -29,6 +29,16 @@
   flex-direction: column;
   align-items: center;
   padding-top: 0.5rem;
+  gap: 0.5rem;
+  cursor: pointer;
+  width: 100%;
+}
+
+.collapsedLabel {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  user-select: none;
 }
 
 @keyframes rail-pulse {

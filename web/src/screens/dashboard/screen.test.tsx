@@ -316,10 +316,56 @@ describe('DashboardScreen', () => {
     expect(screen.queryByText('session-alpha')).not.toBeInTheDocument()
     // expand button is now shown
     expect(screen.getByRole('button', { name: /expand endpoints panel/i })).toBeInTheDocument()
+    // collapsed label is visible
+    expect(screen.getByText('Endpoints')).toBeInTheDocument()
 
     // expand
     fireEvent.click(screen.getByRole('button', { name: /expand endpoints panel/i }))
     await waitFor(() => expect(screen.getByText('session-alpha')).toBeInTheDocument())
+  })
+
+  test('endpoint rail sorts sessions by most recent lastRequestAt first', async () => {
+    const recentSession: SessionSummary = {
+      uuid: 'uuid-recent',
+      slug: 'session-recent',
+      group: null,
+      statusCode: 200,
+      requestsCount: 5,
+      lastRequestAt: new Date(Date.now() - 1000),
+      createdAt: new Date(Date.now() - 10_000),
+      expiresAt: new Date(Date.now() + 86_400_000),
+      longLived: false,
+    }
+    const noRecentSession: SessionSummary = {
+      uuid: 'uuid-norecent',
+      slug: 'session-norecent',
+      group: null,
+      statusCode: 200,
+      requestsCount: 0,
+      lastRequestAt: null,
+      createdAt: new Date(Date.now() - 5_000),
+      expiresAt: new Date(Date.now() + 86_400_000),
+      longLived: false,
+    }
+
+    mockListAllSessions.mockResolvedValue([noRecentSession, recentSession])
+
+    renderScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('session-recent')).toBeInTheDocument()
+      expect(screen.getByText('session-norecent')).toBeInTheDocument()
+    })
+
+    const buttons = Array.from(document.querySelectorAll('button')).filter((btn) => {
+      const text = btn.textContent ?? ''
+      return text.includes('session-recent') || text.includes('session-norecent')
+    })
+
+    expect(buttons.length).toBeGreaterThanOrEqual(2)
+    const recentIndex = buttons.findIndex((btn) => (btn.textContent ?? '').includes('session-recent'))
+    const noRecentIndex = buttons.findIndex((btn) => (btn.textContent ?? '').includes('session-norecent'))
+    expect(recentIndex).toBeLessThan(noRecentIndex)
   })
 
   test('collapsed state persists in localStorage across remounts', async () => {

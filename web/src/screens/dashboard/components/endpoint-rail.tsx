@@ -25,13 +25,33 @@ export const EndpointRail: React.FC<{
   collapsed: boolean
   onToggleCollapse: () => void
 }> = ({ sessions, loading, selected, onSelect, groups, groupFilter, onGroupFilter, activeUUIDs, onNewSession, collapsed, onToggleCollapse }) => {
+  const sortedSessions = React.useMemo(
+    () =>
+      [...sessions].sort((a, b) => {
+        const aTime = a.lastRequestAt?.getTime() ?? 0
+        const bTime = b.lastRequestAt?.getTime() ?? 0
+        if (bTime !== aTime) return bTime - aTime
+        const ac = a.createdAt.getTime()
+        const bc = b.createdAt.getTime()
+        if (bc !== ac) return bc - ac
+        return a.slug.localeCompare(b.slug)
+      }),
+    [sessions]
+  )
+
   if (collapsed) {
     return (
-      <div className={styles.collapsedStrip}>
-        <ActionIcon variant="subtle" size="sm" aria-label="Expand endpoints panel" onClick={onToggleCollapse}>
-          <IconChevronRight size="1em" />
-        </ActionIcon>
-      </div>
+      <UnstyledButton
+        className={styles.collapsedStrip}
+        onClick={onToggleCollapse}
+        aria-label="Expand endpoints panel"
+        title="Show endpoints"
+      >
+        <IconChevronRight size="1em" />
+        <Text size="xs" fw={600} className={styles.collapsedLabel}>
+          Endpoints
+        </Text>
+      </UnstyledButton>
     )
   }
 
@@ -91,10 +111,10 @@ export const EndpointRail: React.FC<{
         </>
       ) : sessions.length === 0 ? (
         <Text c="dimmed" size="sm" py="xs">
-          No endpoints yet. Click “New” to create one.
+          No endpoints yet. Click "New" to create one.
         </Text>
       ) : (
-        sessions.map((session) => {
+        sortedSessions.map((session) => {
           const isActive = selected === session.uuid
           const isLive = activeUUIDs.has(session.uuid)
 
