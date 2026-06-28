@@ -4,6 +4,7 @@
   grid-template-columns: 200px minmax(220px, 1fr) minmax(360px, 1.83fr);
   gap: var(--mantine-spacing-lg);
   align-items: flex-start;
+  transition: grid-template-columns 200ms ease;
 }
 
 .rail {
@@ -19,6 +20,11 @@
   position: sticky;
   top: var(--mantine-spacing-md);
   min-height: 8em;
+}
+
+.layoutRailCollapsed {
+  grid-template-columns: 40px minmax(220px, 1fr) minmax(360px, 1.83fr);
+  transition: grid-template-columns 200ms ease;
 }
 
 /* Collapse the detail pane on medium screens — stream gets the space */

@@ -14,6 +14,7 @@ export enum UsedStorageKeys {
   SessionDetailsShellTab = 'sd-selected-shell-tab',
   SessionDetailsCodeTab = 'sd-selected-code-tab',
   RequestDetailsHeadersExpand = 'rd-headers-expand',
+  DashboardRailCollapsed = 'dashboard-rail-collapsed',
 }
 
 export type StorageArea = 'local' | 'session'

@@ -4,7 +4,7 @@ import { notifications as notify } from '@mantine/notifications'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { FirehoseEvent, SessionSummary } from '~/api'
-import { useData } from '~/shared'
+import { useData, useStorage, UsedStorageKeys } from '~/shared'
 import { NewSessionModal } from '~/screens/components/header/components'
 import { ALL_SESSIONS, DashboardSearch, EndpointRail, LiveStream, RequestPanel, type SelectedRequest } from './components'
 import { useEventStream } from './use-event-stream'
@@ -16,6 +16,8 @@ const ACTIVE_WINDOW_MS = 6_000
 export function DashboardScreen(): React.JSX.Element {
   const { listAllSessions } = useData()
   const [searchParams] = useSearchParams()
+  const [railCollapsed, setRailCollapsed] = useStorage<boolean>(false, UsedStorageKeys.DashboardRailCollapsed, 'local')
+  const handleToggleRail = useCallback(() => setRailCollapsed((c) => !c), [setRailCollapsed])
 
   const [sessions, setSessions] = useState<ReadonlyArray<SessionSummary>>([])
   const [loading, setLoading] = useState<boolean>(true)
@@ -222,7 +224,7 @@ export function DashboardScreen(): React.JSX.Element {
         Dashboard
       </Title>
 
-      <div className={styles.layout}>
+      <div className={`${styles.layout} ${railCollapsed ? styles.layoutRailCollapsed : ''}`}>
         <Paper className={styles.rail} withBorder p="sm" radius="md">
           <EndpointRail
             sessions={sessions}
@@ -234,6 +236,8 @@ export function DashboardScreen(): React.JSX.Element {
             onGroupFilter={setGroupFilter}
             activeUUIDs={activeUUIDs}
             onNewSession={newSessionHandlers.open}
+            collapsed={railCollapsed}
+            onToggleCollapse={handleToggleRail}
           />
         </Paper>
 

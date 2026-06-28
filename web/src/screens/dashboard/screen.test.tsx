@@ -62,6 +62,21 @@ vi.mock('~/screens/components/header/components', () => ({
     opened ? <div data-testid="new-session-modal" /> : null,
 }))
 
+// A simple in-memory Storage so useStorage works under Node's experimental localStorage.
+const makeStorage = (): Storage => {
+  const m = new Map<string, string>()
+  return {
+    get length() {
+      return m.size
+    },
+    clear: () => m.clear(),
+    getItem: (k: string) => (m.has(k) ? (m.get(k) as string) : null),
+    key: (i: number) => Array.from(m.keys())[i] ?? null,
+    removeItem: (k: string) => void m.delete(k),
+    setItem: (k: string, v: string) => void m.set(k, v),
+  }
+}
+
 // Import after mocks (vi.mock is hoisted).
 import { DashboardScreen } from './screen'
 
@@ -131,6 +146,8 @@ const pushEvent = (event: FirehoseEvent): void => {
 
 describe('DashboardScreen', () => {
   beforeEach(() => {
+    vi.stubGlobal('localStorage', makeStorage())
+    vi.stubGlobal('sessionStorage', makeStorage())
     mockListAllSessions.mockResolvedValue(SESSIONS)
     mockSubscribeFirehose.mockImplementation((listeners: FirehoseListeners) => {
       fhRef.current = listeners
@@ -148,6 +165,7 @@ describe('DashboardScreen', () => {
   afterEach(() => {
     fhRef.current = null
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
   test('renders the endpoint rail and an empty live stream', async () => {
@@ -283,5 +301,45 @@ describe('DashboardScreen', () => {
     } finally {
       document.body.removeChild(input)
     }
+  })
+
+  test('collapse toggle hides the endpoints list and shows an expand button', async () => {
+    renderScreen()
+
+    await waitFor(() => expect(screen.getByText('session-alpha')).toBeInTheDocument())
+
+    // collapse
+    const collapseBtn = screen.getByRole('button', { name: /collapse endpoints panel/i })
+    fireEvent.click(collapseBtn)
+
+    // session list is no longer visible
+    expect(screen.queryByText('session-alpha')).not.toBeInTheDocument()
+    // expand button is now shown
+    expect(screen.getByRole('button', { name: /expand endpoints panel/i })).toBeInTheDocument()
+
+    // expand
+    fireEvent.click(screen.getByRole('button', { name: /expand endpoints panel/i }))
+    await waitFor(() => expect(screen.getByText('session-alpha')).toBeInTheDocument())
+  })
+
+  test('collapsed state persists in localStorage across remounts', async () => {
+    const storageKey = 'webhook-tester-v2-dashboard-rail-collapsed'
+
+    // Start collapsed via localStorage
+    localStorage.setItem(storageKey, JSON.stringify(true))
+
+    const { unmount } = renderScreen()
+
+    // On mount the panel should already be collapsed
+    await waitFor(() => expect(screen.queryByText('session-alpha')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /expand endpoints panel/i })).toBeInTheDocument()
+
+    // Expand and verify the key flipped in localStorage
+    fireEvent.click(screen.getByRole('button', { name: /expand endpoints panel/i }))
+    await waitFor(() => expect(screen.getByText('session-alpha')).toBeInTheDocument())
+    expect(JSON.parse(localStorage.getItem(storageKey) ?? 'null')).toBe(false)
+
+    unmount()
+    localStorage.removeItem(storageKey)
   })
 })

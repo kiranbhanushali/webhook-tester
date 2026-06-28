@@ -1,5 +1,5 @@
-import { Badge, Box, Button, Group, Select, Skeleton, Stack, Text, UnstyledButton } from '@mantine/core'
-import { IconCirclePlusFilled, IconStack2 } from '@tabler/icons-react'
+import { ActionIcon, Badge, Box, Button, Group, Select, Skeleton, Stack, Text, UnstyledButton } from '@mantine/core'
+import { IconChevronLeft, IconChevronRight, IconCirclePlusFilled, IconStack2 } from '@tabler/icons-react'
 import React from 'react'
 import type { SessionSummary } from '~/api'
 import { slugColor } from '../utils'
@@ -22,7 +22,19 @@ export const EndpointRail: React.FC<{
   /** Session UUIDs that captured a webhook in the live stream recently (shows a pulsing dot). */
   activeUUIDs: ReadonlySet<string>
   onNewSession: () => void
-}> = ({ sessions, loading, selected, onSelect, groups, groupFilter, onGroupFilter, activeUUIDs, onNewSession }) => {
+  collapsed: boolean
+  onToggleCollapse: () => void
+}> = ({ sessions, loading, selected, onSelect, groups, groupFilter, onGroupFilter, activeUUIDs, onNewSession, collapsed, onToggleCollapse }) => {
+  if (collapsed) {
+    return (
+      <div className={styles.collapsedStrip}>
+        <ActionIcon variant="subtle" size="sm" aria-label="Expand endpoints panel" onClick={onToggleCollapse}>
+          <IconChevronRight size="1em" />
+        </ActionIcon>
+      </div>
+    )
+  }
+
   return (
     <Stack gap="xs">
       <Group justify="space-between" align="center" wrap="nowrap">
@@ -30,6 +42,9 @@ export const EndpointRail: React.FC<{
           <IconStack2 size="1.2em" />
           <Text fw={600}>Endpoints</Text>
         </Group>
+        <ActionIcon variant="subtle" size="sm" aria-label="Collapse endpoints panel" onClick={onToggleCollapse}>
+          <IconChevronLeft size="1em" />
+        </ActionIcon>
         <Button
           size="compact-xs"
           variant="light"
