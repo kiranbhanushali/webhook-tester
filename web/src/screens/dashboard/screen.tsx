@@ -1,4 +1,4 @@
-import { Paper, Title } from '@mantine/core'
+import { Divider, Paper, Title } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { notifications as notify } from '@mantine/notifications'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -6,7 +6,7 @@ import { useSearchParams } from 'react-router-dom'
 import type { FirehoseEvent, SessionSummary } from '~/api'
 import { useData } from '~/shared'
 import { NewSessionModal } from '~/screens/components/header/components'
-import { ALL_SESSIONS, EndpointRail, LiveStream, RequestPanel, type SelectedRequest } from './components'
+import { ALL_SESSIONS, DashboardSearch, EndpointRail, LiveStream, RequestPanel, type SelectedRequest } from './components'
 import { useEventStream } from './use-event-stream'
 import styles from './screen.module.css'
 
@@ -24,6 +24,7 @@ export function DashboardScreen(): React.JSX.Element {
   const [selected, setSelected] = useState<string | null>(searchParams.get('session') ?? ALL_SESSIONS)
   const [groupFilter, setGroupFilter] = useState<string | null>(searchParams.get('group'))
   const [detail, setDetail] = useState<SelectedRequest | null>(null)
+  const [searchActive, setSearchActive] = useState<boolean>(false)
   const [newSessionOpened, newSessionHandlers] = useDisclosure(false)
 
   // bumped on an interval so the rail's live dots fade as the activity window slides (see activeUUIDs)
@@ -237,19 +238,31 @@ export function DashboardScreen(): React.JSX.Element {
         </Paper>
 
         <Paper className={styles.stream} withBorder p="sm" radius="md">
-          <LiveStream
-            events={events}
-            sessionByUUID={sessionByUUID}
-            live={live}
-            error={error}
-            filtered={filterApplied}
-            loading={streamLoading}
-            hasMore={hasMore}
-            loadingOlder={loadingOlder}
-            onLoadOlder={loadOlder}
-            onRowClick={handleRowClick}
+          <DashboardSearch
+            session={selected === ALL_SESSIONS ? null : selected}
+            group={groupFilter}
+            onResultClick={handleRowClick}
             selectedUUID={detail?.rID ?? null}
+            onActiveChange={setSearchActive}
           />
+          {!searchActive && (
+            <>
+              <Divider mb="xs" />
+              <LiveStream
+                events={events}
+                sessionByUUID={sessionByUUID}
+                live={live}
+                error={error}
+                filtered={filterApplied}
+                loading={streamLoading}
+                hasMore={hasMore}
+                loadingOlder={loadingOlder}
+                onLoadOlder={loadOlder}
+                onRowClick={handleRowClick}
+                selectedUUID={detail?.rID ?? null}
+              />
+            </>
+          )}
         </Paper>
 
         <Paper className={styles.detail} withBorder p="sm" radius="md">

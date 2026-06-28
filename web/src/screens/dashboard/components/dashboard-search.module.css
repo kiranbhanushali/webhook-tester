@@ -1,0 +1,26 @@
+.row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--mantine-radius-sm);
+  border-bottom: 1px solid var(--mantine-color-default-border);
+  transition: background-color 100ms ease;
+}
+
+.row:hover {
+  background-color: var(--mantine-color-default-hover);
+}
+
+.rowSelected {
+  background-color: var(--mantine-color-blue-light);
+}
+
+.rowSelected:hover {
+  background-color: var(--mantine-color-blue-light-hover);
+}
+
+.scroll {
+  max-height: calc(100vh - 20rem);
+  min-height: 8rem;
+}

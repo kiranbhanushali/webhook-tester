@@ -1,7 +1,7 @@
 .layout {
   display: grid;
-  /* rail | live-stream (narrower) | detail (wider — this is where you read the body) */
-  grid-template-columns: 230px minmax(320px, 1fr) minmax(480px, 1.7fr);
+  /* rail ~15% | live-stream ~30% | detail ~55% (dominant body viewer) */
+  grid-template-columns: 200px minmax(220px, 1fr) minmax(360px, 1.83fr);
   gap: var(--mantine-spacing-lg);
   align-items: flex-start;
 }
@@ -24,7 +24,7 @@
 /* Collapse the detail pane on medium screens — stream gets the space */
 @media (max-width: 64em) {
   .layout {
-    grid-template-columns: 230px 1fr;
+    grid-template-columns: 200px 1fr;
   }
 
   .detail {

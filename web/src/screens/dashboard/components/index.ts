@@ -1,3 +1,4 @@
+export { DashboardSearch } from './dashboard-search'
 export { EndpointRail, ALL_SESSIONS } from './endpoint-rail'
 export { LiveStream } from './live-stream'
 export { RequestDrawer, type SelectedRequest } from './request-drawer'

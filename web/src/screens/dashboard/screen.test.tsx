@@ -22,6 +22,7 @@ const {
   mockSwitchToSession,
   mockSwitchToRequest,
   mockGetRecentEvents,
+  mockSearchIdentifiers,
   fhRef,
 } = vi.hoisted(() => ({
   mockListAllSessions: vi.fn<() => Promise<ReadonlyArray<SessionSummary>>>(),
@@ -29,6 +30,7 @@ const {
   mockSwitchToSession: vi.fn<(sID: string) => Promise<() => Promise<void>>>(),
   mockSwitchToRequest: vi.fn<(sID: string, rID: string | null) => Promise<() => Promise<void>>>(),
   mockGetRecentEvents: vi.fn<(opts?: { session?: string; group?: string; before?: number }) => Promise<RecentEventsPage>>(),
+  mockSearchIdentifiers: vi.fn<() => Promise<ReadonlyArray<never>>>(),
   fhRef: { current: null as FirehoseListeners | null },
 }))
 
@@ -42,6 +44,7 @@ vi.mock('~/shared', async (importOriginal) => {
       switchToSession: mockSwitchToSession,
       switchToRequest: mockSwitchToRequest,
       getRecentEvents: mockGetRecentEvents,
+      searchIdentifiers: mockSearchIdentifiers,
     }),
   }
 })
@@ -139,6 +142,7 @@ describe('DashboardScreen', () => {
     mockSwitchToRequest.mockResolvedValue(() => Promise.resolve())
     // recent backfill is empty by default; individual tests override as needed
     mockGetRecentEvents.mockResolvedValue({ items: [], nextBefore: 0, hasMore: false })
+    mockSearchIdentifiers.mockResolvedValue([])
   })
 
   afterEach(() => {

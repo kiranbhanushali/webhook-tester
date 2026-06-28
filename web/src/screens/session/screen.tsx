@@ -63,7 +63,7 @@ export function SessionAndRequestScreen(): React.JSX.Element {
         <>
           <Group mb="sm" gap="xs">
             <Button variant="light" leftSection={<IconPencil size="1em" />} onClick={() => setEditorOpened(true)}>
-              Edit session settings
+              Edit configuration
             </Button>
             <Button
               component={Link}
