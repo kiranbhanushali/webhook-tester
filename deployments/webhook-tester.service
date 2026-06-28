@@ -1,0 +1,31 @@
+[Unit]
+Description=Webhook Tester
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=webhook
+Group=webhook
+# Set a strong token here (gates the dashboard + /api; the /w/{slug} webhook path stays public).
+# Override safely with: sudo systemctl edit webhook-tester
+Environment=AUTH_TOKEN=change-me-strong-token
+Environment=HTTP_PORT=8080
+Environment=STORAGE_DRIVER=sqlite
+Environment=SQLITE_PATH=/var/lib/webhook-tester/wh.db
+Environment=MAX_REQUESTS=5000
+# On a very large existing DB, shorten this for a fast boot (older data still searchable via SQLite):
+# Environment=HOT_INDEX_WINDOW=30m
+ExecStart=/usr/local/bin/webhook-tester start
+Restart=always
+RestartSec=2
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/webhook-tester
+StateDirectory=webhook-tester
+
+[Install]
+WantedBy=multi-user.target
