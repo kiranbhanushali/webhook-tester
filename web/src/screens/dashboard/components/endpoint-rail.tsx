@@ -1,6 +1,6 @@
-import { ActionIcon, Badge, Box, Button, Group, Select, Skeleton, Stack, Text, UnstyledButton } from '@mantine/core'
-import { IconChevronLeft, IconChevronRight, IconCirclePlusFilled, IconStack2 } from '@tabler/icons-react'
-import React from 'react'
+import { ActionIcon, Badge, Box, Button, Group, Select, Skeleton, Stack, Text, TextInput, UnstyledButton } from '@mantine/core'
+import { IconChevronLeft, IconChevronRight, IconCirclePlusFilled, IconSearch, IconStack2 } from '@tabler/icons-react'
+import React, { useState } from 'react'
 import type { SessionSummary } from '~/api'
 import { slugColor } from '../utils'
 import styles from './endpoint-rail.module.css'
@@ -25,6 +25,8 @@ export const EndpointRail: React.FC<{
   collapsed: boolean
   onToggleCollapse: () => void
 }> = ({ sessions, loading, selected, onSelect, groups, groupFilter, onGroupFilter, activeUUIDs, onNewSession, collapsed, onToggleCollapse }) => {
+  const [searchQuery, setSearchQuery] = useState('')
+
   const sortedSessions = React.useMemo(
     () =>
       [...sessions].sort((a, b) => {
@@ -38,6 +40,14 @@ export const EndpointRail: React.FC<{
       }),
     [sessions]
   )
+
+  const filteredSessions = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return sortedSessions
+    return sortedSessions.filter(
+      (s) => s.slug.toLowerCase().includes(q) || (s.group !== null && s.group.toLowerCase().includes(q))
+    )
+  }, [sortedSessions, searchQuery])
 
   if (collapsed) {
     return (
@@ -88,6 +98,15 @@ export const EndpointRail: React.FC<{
         aria-label="Filter stream by group"
       />
 
+      <TextInput
+        size="xs"
+        placeholder="Search endpoints…"
+        leftSection={<IconSearch size="0.85em" />}
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.currentTarget.value)}
+        aria-label="Search endpoints"
+      />
+
       <UnstyledButton
         className={`${styles.item} ${selected === ALL_SESSIONS ? styles.itemActive : ''}`}
         onClick={() => onSelect(ALL_SESSIONS)}
@@ -113,8 +132,12 @@ export const EndpointRail: React.FC<{
         <Text c="dimmed" size="sm" py="xs">
           No endpoints yet. Click "New" to create one.
         </Text>
+      ) : filteredSessions.length === 0 ? (
+        <Text c="dimmed" size="sm" py="xs">
+          No endpoints match your search.
+        </Text>
       ) : (
-        sortedSessions.map((session) => {
+        filteredSessions.map((session) => {
           const isActive = selected === session.uuid
           const isLive = activeUUIDs.has(session.uuid)
 

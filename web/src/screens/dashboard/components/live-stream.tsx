@@ -31,6 +31,8 @@ const StreamRow: React.FC<{
   const status = returnedStatus(event, sessionByUUID)
   const unauthorized = req.authorized === false
 
+  const peek = requestPeek(event)
+
   return (
     <UnstyledButton
       ref={rowRef}
@@ -38,39 +40,42 @@ const StreamRow: React.FC<{
       onClick={onClick}
       aria-label={`Open ${req.method} request to ${event.sessionSlug}`}
     >
-      <Group justify="space-between" wrap="nowrap" gap="xs">
-        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
-          <Tooltip label={dayjs(req.capturedAt).format('YYYY-MM-DD HH:mm:ss.SSS')} withArrow openDelay={300}>
-            <Text size="xs" c="dimmed" style={{ flex: '0 0 auto', width: '5.5em' }}>
-              {dayjs(req.capturedAt).fromNow(true)}
-            </Text>
-          </Tooltip>
+      <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, width: '100%' }}>
+        <Tooltip label={dayjs(req.capturedAt).format('YYYY-MM-DD HH:mm:ss.SSS')} withArrow openDelay={300}>
+          <Text size="xs" c="dimmed" style={{ flex: '0 0 auto', width: '5.5em' }}>
+            {dayjs(req.capturedAt).fromNow(true)}
+          </Text>
+        </Tooltip>
 
-          <Badge variant="light" color={slugColor(event.sessionSlug)} style={{ flex: '0 0 auto' }}>
-            {event.sessionSlug}
+        <Badge
+          variant="light"
+          color={slugColor(event.sessionSlug)}
+          style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '9rem' }}
+          title={event.sessionSlug}
+        >
+          {event.sessionSlug}
+        </Badge>
+
+        <Badge variant="dot" color={methodToColor(req.method)} style={{ flex: '0 0 auto' }}>
+          {req.method}
+        </Badge>
+
+        {status !== null && (
+          <Badge variant="light" color={statusCodeToColor(status)} style={{ flex: '0 0 auto' }}>
+            {status}
           </Badge>
+        )}
 
-          <Badge variant="dot" color={methodToColor(req.method)} style={{ flex: '0 0 auto' }}>
-            {req.method}
-          </Badge>
-
-          {status !== null && (
-            <Badge variant="light" color={statusCodeToColor(status)} style={{ flex: '0 0 auto' }}>
-              {status}
+        {unauthorized && (
+          <Tooltip label="Inbound auth failed — 401 returned" withArrow>
+            <Badge color="red" variant="filled" size="sm" style={{ flex: '0 0 auto' }}>
+              Unauthorized
             </Badge>
-          )}
+          </Tooltip>
+        )}
 
-          {unauthorized && (
-            <Tooltip label="Inbound auth failed — 401 returned" withArrow>
-              <Badge color="red" variant="filled" size="sm" style={{ flex: '0 0 auto' }}>
-                Unauthorized
-              </Badge>
-            </Tooltip>
-          )}
-        </Group>
-
-        <Text className={styles.peek} c="dimmed" style={{ minWidth: 0 }}>
-          {requestPeek(event)}
+        <Text className={styles.peek} c="dimmed" style={{ flex: '1 1 0', minWidth: 0 }} title={peek}>
+          {peek}
         </Text>
       </Group>
     </UnstyledButton>
