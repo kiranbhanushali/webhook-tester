@@ -40,35 +40,37 @@ const StreamRow: React.FC<{
       onClick={onClick}
       aria-label={`Open ${req.method} request to ${event.sessionSlug}`}
     >
-      <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, width: '100%' }}>
+      {/* Single flat flex row: time | slug | method | status | url — no nested groups so nothing can collide */}
+      <Group gap={4} wrap="nowrap" style={{ minWidth: 0, width: '100%' }}>
         <Tooltip label={dayjs(req.capturedAt).format('YYYY-MM-DD HH:mm:ss.SSS')} withArrow openDelay={300}>
-          <Text size="xs" c="dimmed" style={{ flex: '0 0 auto', width: '5.5em' }}>
+          <Text size="xs" c="dimmed" style={{ flex: '0 0 auto', width: '4em' }}>
             {dayjs(req.capturedAt).fromNow(true)}
           </Text>
         </Tooltip>
 
         <Badge
+          size="xs"
           variant="light"
           color={slugColor(event.sessionSlug)}
-          style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '9rem' }}
+          style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '6rem' }}
           title={event.sessionSlug}
         >
           {event.sessionSlug}
         </Badge>
 
-        <Badge variant="dot" color={methodToColor(req.method)} style={{ flex: '0 0 auto' }}>
+        <Badge size="xs" variant="dot" color={methodToColor(req.method)} style={{ flex: '0 0 auto' }}>
           {req.method}
         </Badge>
 
         {status !== null && (
-          <Badge variant="light" color={statusCodeToColor(status)} style={{ flex: '0 0 auto' }}>
+          <Badge size="xs" variant="light" color={statusCodeToColor(status)} style={{ flex: '0 0 auto' }}>
             {status}
           </Badge>
         )}
 
         {unauthorized && (
           <Tooltip label="Inbound auth failed — 401 returned" withArrow>
-            <Badge color="red" variant="filled" size="sm" style={{ flex: '0 0 auto' }}>
+            <Badge color="red" variant="filled" size="xs" style={{ flex: '0 0 auto' }}>
               Unauthorized
             </Badge>
           </Tooltip>
